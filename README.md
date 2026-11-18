@@ -77,10 +77,6 @@ vendor/         three.js
 screenshots/    README 截图
 ```
 
-## 用 Qoder 做出来
-
-从 0 到上线全程在 Qoder 中完成：场景与程序化建模、玩法逻辑、移动端适配、界面文案，最后用 Qoder Sites 部署并公开访问；后续按试玩反馈继续在同一个 Qoder 工程里迭代。
-
 ## 说明
 
 - 本项目为比赛展示作品，梗文案仅作幽默表达；
