@@ -1,6 +1,6 @@
 # 奶娃快跑 · 热梗跑酷
 
-> 一个打开浏览器就能玩的低多边形 3D 跑酷小游戏 —— 2026 Qoder 高校创造力大赛「LifeHack 生活娱乐」赛道参赛作品。
+> 一个打开浏览器就能玩的低多边形 3D 跑酷小游戏。
 
 **在线试玩：** https://naiwa-run-z5gt91cnxll.qoder.zone/
 **GitHub Pages 镜像：** https://chhhhhhhhhhhhhhh.github.io/naiba-run/
