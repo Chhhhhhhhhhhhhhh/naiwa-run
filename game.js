@@ -18,6 +18,12 @@ const LANE_X = [-2.4, 0, 2.4];
 const GRAVITY = 26, JUMP_V = 8.4;
 const SIGNS = ['卷王大厦', '摸鱼中心', '画饼集团', '早八酒店', '666超市', 'EMO网吧', '内卷工厂', '躺平公寓', '干饭食堂', '奶蛙博物馆'];
 const B_COLORS = [0xffb3c9, 0xb3e0ff, 0xffe0a3, 0xc9b3ff, 0xb3ffd9, 0xffd9b3];
+const DISTRICTS = [
+  { name: '奶娃大学城', signs: ['早八教学楼', '图书馆', '干饭食堂', '卷王自习室', '青春宿舍'], colors: [0xffd9b3, 0xb3e0ff, 0xffe0a3, 0xffb3c9] },
+  { name: '奶昔商业街', signs: ['奶昔补给', '666超市', '快乐星球', '奶茶研究所', '来财商行'], colors: [0xffb3c9, 0xc9b3ff, 0xffd0a3, 0xb3ffd9] },
+  { name: '躺平公园', signs: ['摸鱼中心', '躺平公寓', '爱你老己', '慢生活馆'], colors: [0xb3ffd9, 0xffe0a3, 0xb3e0ff, 0xffd9b3] },
+];
+const districtAt = pos => DISTRICTS[Math.floor(Math.max(0, pos) / 220) % DISTRICTS.length];
 const MENU_TIPS = [
   '温馨提示：跑不过 DDL 是正常的',
   '温馨提示：奶娃饿了就要喝奶',
@@ -99,9 +105,10 @@ const AIR_FLIP_DUR = 0.62; // 一次跳跃的滞空时间，正好转满一圈
 const G = {
   state: 'menu', t: 0, distance: 0, speed: 13, coins: 0, score: 0,
   lane: 1, px: 0, py: 0, vy: 0, sliding: 0, pendingSlide: false,
-  shield: 0, sprint: 0, magnet: 0,
-  objects: [], buildings: [], nextSpawn: 40, nextBuilding: 5, nextLamp: 20, nextGantry: 60,
+  shield: 0, sprint: 0, magnet: 0, grace: 0,
+  objects: [], buildings: [], nextSpawn: 40, nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95,
   particles: [], shake: 0, deadTimer: 0, phase: 0, airTime: 0, support: 0, jumping: false, speedTier: 0,
+  chaseTime: 0, chaseLane: 1, chaseActive: false,
   best: +(localStorage.getItem('naiwa-best') || 0),
 };
 
@@ -139,16 +146,84 @@ trackTex.repeat.set(1, 40);
 const track = new THREE.Mesh(new THREE.PlaneGeometry(7.6, 400), new THREE.MeshLambertMaterial({ map: trackTex }));
 track.rotation.x = -Math.PI / 2; track.position.set(0, 0.02, -160); track.receiveShadow = true;
 scene.add(track);
+const sidewalkTex = Models.sidewalkTexture();
+sidewalkTex.repeat.set(1.5, 90);
 for (const sx of [-3.8, 3.8]) {
   const curb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 400), Models.L(0xe8e6e0));
   curb.position.set(sx, 0.08, -160); curb.receiveShadow = true; scene.add(curb);
-  const hedge = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 400), Models.L(0x5aa84f));
-  hedge.position.set(sx < 0 ? -4.4 : 4.4, 0.3, -160); scene.add(hedge);
+  const side = Math.sign(sx);
+  const sidewalk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.12, 400), new THREE.MeshLambertMaterial({ map: sidewalkTex }));
+  sidewalk.position.set(side * 5.2, 0.03, -160); sidewalk.receiveShadow = true; scene.add(sidewalk);
+  const outerCurb = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 400), Models.L(0xc4b9a9));
+  outerCurb.position.set(side * 6.5, 0.05, -160); scene.add(outerCurb);
 }
 const posts = [];
 for (let i = 0; i < 54; i++) { const p = Models.post(); p.userData.i = i; scene.add(p); posts.push(p); }
 
 const player = Models.naiwa(); scene.add(player);
+
+/* ---------- 豆包老师：菜单亮相 + 开局/受击后追捕 ---------- */
+let chaser = null;
+new THREE.GLTFLoader().load('assets/49409c35-2e43-46f8-87f4-f85cf8df7d0a.glb', (gltf) => {
+  chaser = gltf.scene;
+  const b = new THREE.Box3().setFromObject(chaser), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+  const s = 2.15 / size.y;
+  chaser.scale.setScalar(s);
+  chaser.position.set(-c.x * s, -b.min.y * s, -c.z * s);
+  // 模型面朝 +z（镜头/玩家方向），保持该朝向
+  chaser.traverse(o => { if (o.isMesh) { o.castShadow = true; const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) if (m.map) m.map.encoding = THREE.LinearEncoding; } });
+  scene.add(chaser);
+}, undefined, err => console.error('豆包老师模型加载失败', err));
+function startChase() { G.chaseActive = true; G.chaseTime = 0; G.chaseLane = pick([0, 1, 2]); }
+function updateChaser(dt) {
+  if (!chaser) return;
+  if (G.state === 'menu') {
+    chaser.visible = true;
+    chaser.position.set(1.85, Math.abs(Math.sin(G.t * 4)) * 0.06, 1.1);
+    chaser.rotation.set(0, -0.28, Math.sin(G.t * 4) * 0.025);
+    chaser.scale.y = 1 + Math.sin(G.t * 4) * 0.025;
+    return;
+  }
+  if (!G.chaseActive || (G.state !== 'play' && G.state !== 'dying')) { chaser.visible = false; return; }
+  G.chaseTime += dt;
+  chaser.visible = true;
+  // 前 1.2 秒从镜头下方追入；1.2～4 秒跟跑并换道；甩开/保护结束后退出
+  const t = G.chaseTime;
+  const entering = Math.min(1, t / 1.2);
+  const exit = t > 4 ? Math.min(1, (t - 4) / 0.8) : 0;
+  const z = 8 - entering * 5 + exit * 5;
+  if (t > 1.8 && Math.floor(t * 0.55) !== Math.floor((t - dt) * 0.55)) G.chaseLane = pick([0, 1, 2]);
+  const targetX = G.px * 0.55 + LANE_X[G.chaseLane] * 0.45;
+  chaser.position.x += (targetX - chaser.position.x) * Math.min(1, dt * 3.5);
+  chaser.position.z = z;
+  chaser.position.y = Math.abs(Math.sin(G.t * 13)) * 0.13;
+  chaser.rotation.z = Math.sin(G.t * 13) * 0.075;
+  chaser.rotation.x = -0.08;
+  chaser.scale.y = 1 + Math.sin(G.t * 13) * 0.035;
+  if (t > 4.8) { G.chaseActive = false; chaser.visible = false; }
+}
+
+/* ---------- 异步加载 GLB 主角模型，替换程序化奶娃 ---------- */
+new THREE.GLTFLoader().load('assets/tripo_convert_820779b7-0c09-4c76-8cd6-a7156d9b61d3.glb', (gltf) => {
+  const model = gltf.scene;
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const s = 1.9 / size.y; // 与原奶娃等高
+  const wrap = new THREE.Group(); // 果冻缩放作用于这个壳（原点在脚底）
+  const pivot = new THREE.Group(); // 空翻/滑铲旋转轴：身体中心（修"着力点"错误）
+  model.scale.setScalar(s);
+  // 模型质心在 X 方向并不居中（尾巴向一侧伸出）；按包围盒中心校准到车道中央
+  model.position.set(-center.x * s, -box.min.y * s - 0.95, -center.z * s);
+  // Tripo 该模型原生就面朝 -z（前进方向），不再旋转
+  model.traverse(o => { if (o.isMesh) { o.castShadow = true; const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) { if (m.map) { m.map.encoding = THREE.LinearEncoding; } } } });
+  pivot.position.y = 0.95;
+  pivot.add(model); wrap.add(pivot);
+  player.children.forEach(ch => { ch.visible = false; }); // 隐藏程序化身体（护盾/光环/磁铁图标每帧会自行恢复显示）
+  player.userData.spin = pivot; // 空中翻滚改绑到新模型（绕身体中心）
+  player.userData.glbModel = wrap;
+  player.add(wrap);
+}, undefined, err => console.error('GLB 主角加载失败，继续用原奶娃', err));
 
 /* ---------- 对象池 ---------- */
 const pool = {};
@@ -253,20 +328,65 @@ function spawnPattern(pos) {
     roofCoins(lanes[1], pos, 'ramptruck');
   }
 }
+function addScenery(mesh, x, pos, rotation = 0, y = 0.1) {
+  mesh.position.set(x, y, 0); mesh.rotation.y = rotation;
+  scene.add(mesh);
+  G.buildings.push({ wx: x, trackPos: pos, mesh });
+}
 function spawnBuildings(pos) {
+  const district = districtAt(pos), zone = DISTRICTS.indexOf(district);
   for (const side of [-1, 1]) {
-    if (Math.random() < 0.75) {
-      const w = rand(3, 5), h = rand(6, 16);
-      const m = Models.building(pick(SIGNS), pick(B_COLORS), w, h);
-      m.position.set(side * rand(8, 12), 0, 0);
-      scene.add(m);
-      G.buildings.push({ wx: m.position.x, trackPos: pos + rand(0, 5), mesh: m });
+    if (Math.random() < (zone === 2 ? 0.48 : 0.82)) {
+      const w = rand(3.4, 5.2), h = zone === 1 ? rand(6, 13) : rand(7, 16);
+      const m = Models.building(pick(district.signs), pick(district.colors), w, h);
+      addScenery(m, side * rand(8.8, 12.2), pos + rand(0, 5), 0, 0);
     }
   }
 }
+function spawnScenery(pos) {
+  const zone = Math.floor(Math.max(0, pos) / 220) % DISTRICTS.length;
+  const index = Math.floor(pos / 14);
+  for (const side of [-1, 1]) {
+    const facing = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+    // 公交站穿插出现，其余位置按区域使用不同组合
+    if (index > 0 && index % 13 === (side < 0 ? 3 : 9)) {
+      addScenery(Models.busStop(), side * 5.35, pos, facing);
+      continue;
+    }
+    if (zone === 2) {
+      const tree = Models.tree(index % 4 === 0);
+      tree.scale.setScalar(rand(0.85, 1.18));
+      addScenery(tree, side * rand(5.5, 6.1), pos);
+      if (index % 3 === 0) addScenery(Models.flowerBed(), side * 4.85, pos + 3, facing);
+      if (index % 4 === 1) addScenery(Models.bench(), side * 5.45, pos + 4, -facing);
+    } else if (zone === 0) {
+      if (index % 2 === 0) addScenery(Models.tree(index % 6 === 0), side * 5.65, pos);
+      else addScenery(Models.flowerBed(), side * 5.0, pos, facing);
+      if (index % 5 === 2) addScenery(Models.bench(), side * 5.5, pos + 4, -facing);
+    } else {
+      if (index % 7 === 2) addScenery(Models.stall(), side * 6.0, pos, facing);
+      else if (index % 3 === 0) addScenery(Models.tree(false), side * 5.75, pos);
+      else addScenery(Models.flowerBed(), side * 4.95, pos, facing);
+    }
+  }
+}
+function disposeObject(root) {
+  scene.remove(root);
+  root.traverse(n => {
+    if (n.geometry) n.geometry.dispose();
+    const materials = n.material ? (Array.isArray(n.material) ? n.material : [n.material]) : [];
+    for (const m of materials) { if (m.map) m.map.dispose(); m.dispose(); }
+  });
+}
 function ensureWorld() {
   while (G.nextSpawn < G.distance + 150) { spawnPattern(G.nextSpawn); G.nextSpawn += Math.max(18, G.speed * rand(0.8, 1.2)); }
-  while (G.nextBuilding < G.distance + 150) { spawnBuildings(G.nextBuilding); G.nextBuilding += rand(10, 18); }
+  // 建筑间距减半，左右两侧密度约为原来的两倍
+  while (G.nextBuilding < G.distance + 150) { spawnBuildings(G.nextBuilding); G.nextBuilding += rand(6, 9.5); }
+  while (G.nextScenery < G.distance + 150) { spawnScenery(G.nextScenery); G.nextScenery += 14; }
+  while (G.nextCrosswalk < G.distance + 150) {
+    addScenery(Models.crosswalk(), 0, G.nextCrosswalk, 0, 0.045);
+    G.nextCrosswalk += 130;
+  }
   while (G.nextLamp < G.distance + 150) {
     const side = (Math.floor(G.nextLamp / 16) % 2) ? 1 : -1;
     const m = Models.lamp(); m.position.set(side * 5.2, 0, 0); m.rotation.y = side < 0 ? 0 : Math.PI;
@@ -275,7 +395,8 @@ function ensureWorld() {
     G.nextLamp += 16;
   }
   while (G.nextGantry < G.distance + 150) {
-    const m = Models.gantry(pick(['奶娃快跑', '加油奥利给', '相信光', '冲鸭', '666']));
+    const district = districtAt(G.nextGantry);
+    const m = Models.gantry(pick([district.name, '奶娃快跑', '加油奥利给', '相信光', '冲鸭', '666']));
     scene.add(m);
     G.buildings.push({ wx: 0, trackPos: G.nextGantry, mesh: m });
     G.nextGantry += 50;
@@ -286,8 +407,7 @@ function ensureWorld() {
   });
   G.buildings = G.buildings.filter(b => {
     if (b.trackPos - G.distance > -10) return true;
-    scene.remove(b.mesh);
-    b.mesh.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material) { if (n.material.map) n.material.map.dispose(); n.material.dispose(); } });
+    disposeObject(b.mesh);
     return false;
   });
 }
@@ -385,6 +505,17 @@ function applyPower(o) {
   else if (o.type === 'sprint') { G.sprint = 4.5; popup('奥利给!冲!', '#ffb03f'); AudioSys.say('奥利给!', 1); }
   else { G.magnet = 8; popup('库里库里~', '#8fe8ff'); AudioSys.say('磁吸奶瓶,吸!', 1); }
 }
+function hitObstacle(o) {
+  if (G.grace > 0) { crash(); return; }
+  // 首次受击不结束：障碍爆掉，5 秒闪烁保护，豆包老师重新追捕
+  if (o) { o.resolved = true; o.destroyed = true; }
+  G.grace = 5; G.shake = 0.7;
+  startChase();
+  burst(G.px, 1, 0, 0xffb03f, 22, 11);
+  burst(G.px, 1.3, 0, 0xff5c5c, 12, 8);
+  AudioSys.smash(); AudioSys.say('豆包老师来了!', 0);
+  popup('快跑！5 秒内别再撞！', '#ff9fcf');
+}
 function checkCollisions() {
   for (const o of G.objects) {
     if (o.resolved) continue;
@@ -416,7 +547,7 @@ function checkCollisions() {
           if (G.shield > 0 && G.sprint <= 0) { G.shield--; popup(`相信光盾保住! 剩${G.shield}次`, '#8fe8ff'); AudioSys.say('护盾保住了!', 1); }
           else popup('撞飞! 奥利给!', '#ffb03f');
         }
-      } else { crash(); return; }
+      } else hitObstacle(o);
     }
   }
 }
@@ -455,12 +586,13 @@ function update(dt) {
     }
   } else {
     // 贴地/贴车顶走；若整面车顶突然出现在脚下（从侧面撞上货车），判定失败
-    if (sup >= TRUCK.roofH - 0.05 && G.py < 0.9) { crash(); return; }
+    if (sup >= TRUCK.roofH - 0.05 && G.py < 0.9) { hitObstacle(null); return; }
     G.py = sup; G.vy = 0; G.airTime = 0;
   }
   if (G.sliding > 0) G.sliding -= dt;
   if (G.sprint > 0) G.sprint -= dt;
   if (G.magnet > 0) G.magnet -= dt;
+  if (G.grace > 0) G.grace = Math.max(0, G.grace - dt);
   ensureWorld();
   checkCollisions();
   updateWorldMeshes(dt);
@@ -472,6 +604,7 @@ function update(dt) {
 let dt0 = 0;
 function updateWorldMeshes(dt = 0.016) {
   trackTex.offset.y = -(G.distance / 10);
+  sidewalkTex.offset.y = -(G.distance / 10);
   for (const p of posts) {
     p.position.x = p.userData.i % 2 ? 4.6 : -4.6;
     p.position.z = -(Math.floor(p.userData.i / 2) * 6 - (G.distance % 6));
@@ -514,8 +647,13 @@ function updateWorldMeshes(dt = 0.016) {
   for (const c of clouds) { c.position.x += dt0 * 1.5; if (c.position.x > 70) c.position.x = -70; }
 }
 
+/* 果冻软体感（GLB 主角）：弹簧驱动的挤压拉伸 */
+let glbJelly = 1, glbJellyV = 0, glbAir = false;
+function glbSquash(v) { glbJelly = v; glbJellyV = 0; }
+
 function updatePlayerMesh() {
   const ud = player.userData;
+  player.visible = G.state !== 'menu' && (G.grace <= 0 || Math.floor(G.t * 12) % 2 === 0); // 受击保护期闪烁
   if (G.state === 'pause') return; // 暂停定格，腿不再跑
   const swing = Math.sin(G.phase);
   player.position.set(G.px, G.py, 0);
@@ -524,6 +662,25 @@ function updatePlayerMesh() {
   ud.torso.visible = true;
   ud.legs.forEach(l => l.visible = true);
   if (ud.egg) ud.egg.visible = false;
+  if (ud.glbModel) {
+    const dtj = Math.min(0.05, dt0 || 0.016);
+    // 起跳拉伸 / 落地压扁（一次性冲量）
+    const air = G.py > G.support + 0.05;
+    if (air && !glbAir) glbSquash(1.22);
+    else if (!air && glbAir) glbSquash(0.68);
+    glbAir = air;
+    // 滑铲保持压扁姿态
+    if (G.sliding > 0 && glbJelly > 0.85) glbSquash(0.8);
+    // 弹簧回弹（阻尼振荡 → 果冻感）
+    glbJellyV += (1 - glbJelly) * 190 * dtj;
+    glbJellyV *= Math.exp(-8.5 * dtj);
+    glbJelly += glbJellyV * dtj;
+    const sy = glbJelly, sxz = 1 + (1 - glbJelly) * 0.55; // 体积近似守恒
+    ud.glbModel.scale.set(sxz, sy, sxz);
+    // 跑动小晃动（软胶玩具的左右摆）
+    if (!air && G.sliding <= 0) ud.glbModel.rotation.z = swing * 0.045;
+    else ud.glbModel.rotation.z = 0;
+  }
   // 道具状态标识（奶娃身上）
   if (ud.aura) {
     ud.aura.visible = G.sprint > 0;
@@ -548,7 +705,8 @@ function updatePlayerMesh() {
     return;
   }
   if (G.sliding > 0) {
-    // 奶蛋：蜷缩成蛋向前翻滚
+    // 奶蛋：蜷缩成蛋向前翻滚（GLB 模型整体翻滚，绕身体中心轴）
+    if (ud.spin) ud.spin.rotation.x = -(G.t * 11);
     ud.torso.visible = false;
     ud.legs.forEach(l => l.visible = false);
     if (ud.egg) {
@@ -647,12 +805,13 @@ function updateHUD() {
 /* ---------- 流程 ---------- */
 function resetGame() {
   for (const o of G.objects) release(o);
-  for (const b of G.buildings) scene.remove(b.mesh);
+  for (const b of G.buildings) disposeObject(b.mesh);
   Object.assign(G, {
     distance: 0, speed: 13, coins: 0, score: 0, lane: 1, px: 0, py: 0, vy: 0,
-    sliding: 0, pendingSlide: false, shield: 0, sprint: 0, magnet: 0,
-    objects: [], buildings: [], nextSpawn: 40, nextBuilding: 5, nextLamp: 20, nextGantry: 60,
+    sliding: 0, pendingSlide: false, shield: 0, sprint: 0, magnet: 0, grace: 0,
+    objects: [], buildings: [], nextSpawn: 40, nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95,
     particles: [], shake: 0, deadTimer: 0, airTime: 0, support: 0, jumping: false, speedTier: 0,
+    chaseTime: 0, chaseLane: pick([0, 1, 2]), chaseActive: false,
   });
   puKey = ''; elPowerbars.innerHTML = '';
   if (player.userData.shieldMesh) player.userData.shieldMesh.visible = false;
@@ -661,6 +820,7 @@ function startGame() {
   AudioSys.init(); AudioSys.click(); AudioSys.duckBGM(false);
   resetGame();
   G.state = 'play';
+  startChase();
   document.getElementById('menu').classList.add('hidden');
   document.getElementById('gameover').classList.add('hidden');
   document.getElementById('pause').classList.add('hidden');
@@ -754,6 +914,7 @@ function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
   update(dt);
+  updateChaser(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }

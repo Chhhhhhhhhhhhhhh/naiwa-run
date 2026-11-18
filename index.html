@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,9 @@
 
   <div id="menu" class="overlay">
     <div class="title-wrap">
-      <h1 class="game-title">奶娃快跑</h1>
+      <h1 class="game-title" aria-label="奶娃快跑">
+        <span class="title-char" style="--i:0"><span>奶</span></span><span class="title-char" style="--i:1"><span>娃</span></span><span class="title-char" style="--i:2"><span>快</span></span><span class="title-char" style="--i:3"><span>跑</span></span>
+      </h1>
       <p class="tagline" id="menu-tagline">地铁跑酷？不，是<b>奶</b>跑酷！</p>
     </div>
     <div class="howto">
@@ -68,6 +70,7 @@
 </div>
 
 <script src="vendor/three.min.js"></script>
+<script src="vendor/GLTFLoader.js"></script>
 <script src="models.js"></script>
 <script src="audio.js"></script>
 <script src="game.js"></script>

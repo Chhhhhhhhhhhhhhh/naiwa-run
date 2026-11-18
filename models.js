@@ -189,15 +189,57 @@ const Models = (() => {
       g.add(mesh(cyl(0.02, 0.02, 0.5, 6), T(0x3a2b20), 0, 2.0, 0));
       const cake = mesh(cyl(0.55, 0.55, 0.18, 24), T(0xf2c14e), 0, 1.5, 0);
       cake.rotation.x = Math.PI / 2; g.add(cake);
-      const lb = label('老板画饼', '#f7e6c4', '#8a5a1a', 1.7); lb.position.set(0, 2.75, 0); g.add(lb);
+      const lb = label('食不食油饼', '#f7e6c4', '#8a5a1a', 1.7); lb.position.set(0, 2.75, 0); g.add(lb);
     } else if (type === 'ddl') {
-      const layers = [0xfff6e3, 0xffe9c9, 0xfff6e3, 0xffd9d9];
-      for (let i = 0; i < 4; i++) {
-        const w = 1.1 - i * 0.08;
-        g.add(mesh(box(w, 0.45, 0.9), T(layers[i]), Math.sin(i * 7) * 0.06, 0.25 + i * 0.45, 0));
+      /* Q版鲸鱼女仆（设定图重建）：大头 + 藏青裙摆 + 白围裙 + 鲸鱼尾 */
+      const HAIR = 0x3b5bb5, HAIR2 = 0x7ea6e8, SKIRT = 0x2a3a6e, SKIN = 0xffe9d9;
+      // 裙摆（锥形）+ 白色荷叶边底
+      g.add(mesh(cyl(0.28, 0.72, 0.72, 18), T(SKIRT), 0, 0.5, 0));
+      g.add(mesh(cyl(0.74, 0.78, 0.1, 18), T(0xf5f7ff), 0, 0.16, 0));
+      // 白围裙 + 胸前小鲸鱼图案
+      g.add(mesh(box(0.34, 0.42, 0.06), T(0xf5f7ff), 0, 0.56, 0.34, false));
+      g.add(mesh(sph(0.09, 10, 8), Basic(0x6ea8e8), -0.06, 0.58, 0.38, false));
+      g.add(mesh(cyl(0.0, 0.06, 0.1, 6), Basic(0x6ea8e8), 0.08, 0.58, 0.38, false));
+      // 小躯干 + 泡泡袖手臂
+      g.add(mesh(cyl(0.18, 0.24, 0.34, 12), T(SKIN), 0, 1.05, 0));
+      for (const s of [-1, 1]) {
+        g.add(mesh(sph(0.12, 10, 8), T(0xf5f7ff), s * 0.26, 1.12, 0.08, false));
+        g.add(mesh(sph(0.07, 8, 6), T(SKIN), s * 0.3, 1.0, 0.14, false));
       }
-      g.add(mesh(cyl(0.1, 0.12, 0.24, 10), T(0x8a5a3a), 0.2, 2.1, 0));
-      const lb = label('DDL', '#ffd9d0', '#c22', 1.3); lb.position.set(0, 2.5, 0); g.add(lb);
+      // 大头（后层头发球 + 脸）
+      g.add(mesh(sph(0.46, 18, 14), T(HAIR), 0, 1.62, -0.05));
+      g.add(mesh(sph(0.4, 18, 14), T(SKIN), 0, 1.58, 0.08));
+      // 刘海（前发，深蓝→浅蓝双色）
+      g.add(mesh(sph(0.44, 16, 12, ), T(HAIR), 0, 1.68, 0.02));
+      const bang = mesh(sph(0.42, 16, 12), T(HAIR2), 0, 1.72, 0.05, false);
+      bang.scale.y = 0.85; g.add(bang);
+      // 呆毛
+      const ahoge = mesh(cyl(0.012, 0.03, 0.3, 6), T(HAIR2), 0.05, 2.18, 0.05, false);
+      ahoge.rotation.z = -0.5; g.add(ahoge);
+      // 女仆头饰：白环 + 蓝蝴蝶结
+      const hb = mesh(new THREE.TorusGeometry(0.3, 0.055, 8, 20), T(0xf5f7ff), 0, 1.88, 0.12, false);
+      hb.rotation.x = Math.PI / 2 - 0.35; g.add(hb);
+      g.add(mesh(box(0.14, 0.1, 0.05), T(0x6ea8e8), 0, 1.95, 0.26, false));
+      for (const s of [-1, 1]) {
+        const wing = mesh(sph(0.07, 8, 6), T(0x6ea8e8), s * 0.11, 1.95, 0.26, false);
+        wing.scale.x = 1.4; g.add(wing);
+      }
+      // 大蓝眼睛 + 高光 + 腮红 + 微笑
+      for (const s of [-1, 1]) {
+        g.add(mesh(sph(0.09, 10, 8), Basic(0x4a7dd8), s * 0.15, 1.6, 0.4, false));
+        g.add(mesh(sph(0.03, 8, 6), Basic(0xffffff), s * 0.12, 1.65, 0.45, false));
+        g.add(mesh(sph(0.05, 8, 6), Basic(0xffb3c0), s * 0.26, 1.5, 0.38, false));
+      }
+      const smile = mesh(new THREE.TorusGeometry(0.06, 0.015, 6, 12, Math.PI), Basic(0xd86a7a), 0, 1.47, 0.43, false);
+      smile.rotation.z = Math.PI; g.add(smile);
+      // 身后鲸鱼尾：弯柱 + 双叶尾鳍
+      const tail = mesh(cyl(0.05, 0.1, 0.5, 8), T(HAIR2), 0, 0.9, -0.35, false);
+      tail.rotation.x = -0.7; g.add(tail);
+      for (const s of [-1, 1]) {
+        const fin = mesh(sph(0.12, 8, 6), T(HAIR2), s * 0.1, 1.18, -0.55, false);
+        fin.scale.set(1, 0.45, 1.5); g.add(fin);
+      }
+      const lb = label('鲸娘', '#ffd9d0', '#c22', 1.3); lb.position.set(0, 2.5, 0); g.add(lb);
     } else if (type === 'emo') {
       g.add(mesh(box(1.2, 2.2, 0.3), T(0x4a3b6b), 0, 1.1, 0));
       g.add(mesh(box(1.28, 2.28, 0.06), T(0x6b5a94), 0, 1.1, 0.13, false));
@@ -241,11 +283,11 @@ const Models = (() => {
 
   /* ---------- 奶币 / 道具 ---------- */
   function coin() {
+    // 奶币改为小奶瓶：白色瓶身 + 粉色奶嘴盖，沿用原来的旋转与拾取逻辑
     const g = new THREE.Group();
-    const c = mesh(cyl(0.32, 0.32, 0.08, 20), T(0xffd93f), 0, 0, 0);
-    c.rotation.x = Math.PI / 2; g.add(c);
-    const inner = mesh(cyl(0.22, 0.22, 0.1, 18), T(0xf7ecd9), 0, 0, 0);
-    inner.rotation.x = Math.PI / 2; g.add(inner);
+    g.add(mesh(cyl(0.2, 0.24, 0.6, 16), T(0xffffff), 0, 0, 0));
+    g.add(mesh(cyl(0.1, 0.14, 0.16, 12), T(0xff7bac), 0, 0.38, 0));
+    g.rotation.z = -0.35;
     return g;
   }
   function power(kind) {
@@ -286,7 +328,7 @@ const Models = (() => {
     return g;
   }
 
-  /* ---------- 沥青马路纹理（车道虚线，干净不晃眼） ---------- */
+  /* ---------- 沥青马路纹理（车道实线，干净不晃眼） ---------- */
   function trackTexture() {
     const cv = document.createElement('canvas');
     cv.width = 512; cv.height = 512;
@@ -296,13 +338,11 @@ const Models = (() => {
       c.fillStyle = `rgba(${Math.random() > 0.5 ? '20,22,26' : '90,96,104'},${Math.random() * 0.35})`;
       c.fillRect(Math.random() * 512, Math.random() * 512, 3, 3);
     }
-    // 车道分隔虚线（两条，把路面分成三条车道）
+    // 车道分隔实线（两条，把路面分成三条车道）
     for (const lx of [-1.2, 1.2]) {
       const u = (lx + 3.8) / 7.6 * 512;
-      for (let y = 0; y < 512; y += 64) {
-        c.fillStyle = 'rgba(255,255,255,0.85)';
-        c.fillRect(u - 4, y + 10, 8, 34);
-      }
+      c.fillStyle = 'rgba(255,255,255,0.85)';
+      c.fillRect(u - 4, 0, 8, 512);
     }
     // 路缘实线
     for (const lx of [-3.55, 3.55]) {
@@ -362,15 +402,109 @@ const Models = (() => {
   /* ---------- 场景组件 ---------- */
   function building(sign, color, w, h) {
     const g = new THREE.Group();
-    g.add(mesh(box(w, h, w), L(color), 0, h / 2, 0, false));
-    // 屋顶
-    g.add(mesh(box(w * 1.1, 0.4, w * 1.1), L(0x6a5a7a), 0, h + 0.2, 0, false));
-    const win = L(0x3a3a55);
-    const rows = Math.max(2, Math.floor(h / 1.1));
-    for (let r = 0; r < rows; r++) for (let c = 0; c < 3; c++)
-      g.add(mesh(box(w * 0.16, 0.5, 0.05), win, -w * 0.3 + c * w * 0.3, 0.9 + r * 1.1, w / 2 + 0.03, false));
-    const lb = label(sign, '#fff6e3', '#3a2b20', Math.min(3.2, w * 1.1));
-    lb.position.set(0, h + 1.0, 0); g.add(lb);
+    // 一张立面贴图代替几十扇独立窗户，细节更多但 draw call 更少
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 512;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#' + color.toString(16).padStart(6, '0'); c.fillRect(0, 0, 256, 512);
+    c.fillStyle = 'rgba(255,255,255,.18)'; c.fillRect(0, 0, 18, 512);
+    const rows = Math.max(3, Math.floor(h / 1.5));
+    for (let r = 0; r < rows; r++) {
+      const y = 20 + r * (400 / rows);
+      c.fillStyle = 'rgba(70,55,80,.13)'; c.fillRect(0, y + 34, 256, 4);
+      for (let col = 0; col < 4; col++) {
+        const x = 25 + col * 57;
+        c.fillStyle = 'rgba(255,246,227,.7)'; c.fillRect(x - 3, y - 3, 39, 40);
+        c.fillStyle = Math.random() < 0.2 ? '#ffe6a3' : (Math.random() < 0.5 ? '#52647e' : '#39445e');
+        c.fillRect(x, y, 33, 32);
+        c.fillStyle = 'rgba(255,255,255,.25)'; c.fillRect(x + 4, y + 3, 4, 25);
+      }
+    }
+    c.fillStyle = 'rgba(58,43,32,.12)'; c.fillRect(0, 430, 256, 82);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.anisotropy = 4;
+    g.add(mesh(box(w, h, w), new THREE.MeshLambertMaterial({ map: tex }), 0, h / 2, 0, false));
+    // 屋檐、屋顶设备与水箱，打破所有楼都只有方盒子的轮廓
+    g.add(mesh(box(w * 1.1, 0.28, w * 1.1), L(0x625570), 0, h + 0.14, 0, false));
+    g.add(mesh(box(w * 0.42, 0.65, w * 0.38), L(0xe7e1d8), -w * 0.2, h + 0.58, 0, false));
+    if (h > 10) {
+      g.add(mesh(cyl(0.5, 0.5, 0.8, 12), L(0x7cb7c9), w * 0.22, h + 0.65, 0, false));
+      g.add(mesh(cyl(0.025, 0.025, 1.8, 6), L(0x4a4a55), -w * 0.25, h + 1.45, 0, false));
+    }
+    // 底层商铺：玻璃门、双色雨棚和招牌
+    const front = w / 2;
+    g.add(mesh(box(w * 0.88, 1.7, 0.12), L(0x40506a), 0, 0.9, front + 0.05, false));
+    for (const sx of [-0.23, 0.23]) {
+      g.add(mesh(box(w * 0.36, 1.35, 0.04), P(0x9ed9df, 45), sx * w, 0.92, front + 0.13, false));
+      g.add(mesh(box(0.05, 1.35, 0.05), L(0xfff6e3), sx * w, 0.92, front + 0.17, false));
+    }
+    const awning = new THREE.Group();
+    for (let i = 0; i < 7; i++)
+      awning.add(mesh(box(w * 0.14, 0.16, 0.75), L(i % 2 ? 0xfff6e3 : color), -w * 0.42 + i * w * 0.14, 0, 0, false));
+    awning.position.set(0, 2.05, front + 0.36); awning.rotation.x = -0.12; g.add(awning);
+    const lb = label(sign, '#fff6e3', '#3a2b20', Math.min(3.2, w * 0.95));
+    lb.position.set(0, 2.75, front + 0.2); g.add(lb);
+    return g;
+  }
+  function tree(blossom = false) {
+    const g = new THREE.Group();
+    g.add(mesh(cyl(0.12, 0.19, 1.7, 8), L(0x8a6248), 0, 0.85, 0, false));
+    const colors = blossom ? [0xffb7d2, 0xffd1e2, 0xf49abc] : [0x54ad63, 0x72c768, 0x3e9657];
+    const crowns = [[0, 2.15, 0, 0.9], [-0.48, 1.9, 0.08, 0.62], [0.5, 1.95, -0.08, 0.68]];
+    crowns.forEach((p, i) => {
+      const crown = mesh(new THREE.IcosahedronGeometry(p[3], 1), L(colors[i]), p[0], p[1], p[2], false);
+      crown.rotation.set(i * 0.3, i * 0.7, 0); g.add(crown);
+    });
+    g.add(mesh(cyl(0.65, 0.72, 0.16, 12), L(0xd7c3a4), 0, 0.08, 0, false));
+    return g;
+  }
+  function flowerBed() {
+    const g = new THREE.Group();
+    g.add(mesh(box(1.8, 0.35, 0.85), L(0xe6c7a5), 0, 0.18, 0, false));
+    g.add(mesh(box(1.62, 0.12, 0.68), L(0x59884c), 0, 0.39, 0, false));
+    const colors = [0xff7bac, 0xffd93f, 0xffffff, 0xb793e8];
+    for (let i = 0; i < 7; i++) {
+      const x = -0.66 + i * 0.22, z = i % 2 ? 0.18 : -0.16;
+      g.add(mesh(cyl(0.018, 0.018, 0.28, 5), L(0x3e8550), x, 0.54, z, false));
+      g.add(mesh(new THREE.IcosahedronGeometry(0.11, 0), L(colors[i % colors.length]), x, 0.7, z, false));
+    }
+    return g;
+  }
+  function bench() {
+    const g = new THREE.Group();
+    for (const s of [-1, 1]) {
+      g.add(mesh(box(0.1, 0.65, 0.55), L(0x465364), s * 0.72, 0.33, 0, false));
+      g.add(mesh(box(0.1, 0.8, 0.1), L(0x465364), s * 0.72, 0.85, 0.24, false));
+    }
+    for (let i = 0; i < 3; i++) g.add(mesh(box(1.8, 0.1, 0.16), L(0xd99b62), 0, 0.63, -0.2 + i * 0.2, false));
+    for (let i = 0; i < 3; i++) g.add(mesh(box(1.8, 0.16, 0.08), L(0xd99b62), 0, 0.9 + i * 0.2, 0.26, false));
+    return g;
+  }
+  function busStop() {
+    const g = new THREE.Group();
+    for (const s of [-1, 1]) g.add(mesh(box(0.1, 2.5, 0.1), L(0x40506a), s * 1.55, 1.25, 0, false));
+    g.add(mesh(box(3.5, 0.18, 1.55), L(0x5ec8f2), 0, 2.5, 0, false));
+    const glass = new THREE.MeshPhongMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.35, shininess: 80 });
+    g.add(mesh(box(3.1, 2.1, 0.05), glass, 0, 1.25, -0.58, false));
+    const b = bench(); b.scale.setScalar(0.85); b.position.set(0, 0, -0.3); g.add(b);
+    const lb = label('奶娃站', '#ffd93f', '#3a2b20', 1.45); lb.position.set(-0.85, 2.95, 0); g.add(lb);
+    const route = label('早八路 · 666路', '#fff6e3', '#3a2b20', 1.35); route.position.set(0.75, 1.6, -0.48); g.add(route);
+    return g;
+  }
+  function stall() {
+    const g = new THREE.Group();
+    g.add(mesh(box(2.4, 1.65, 1.55), L(0xffe0a3), 0, 0.83, 0, false));
+    g.add(mesh(box(2.0, 0.8, 0.06), P(0x9ed9df, 40), 0, 1.05, 0.8, false));
+    for (let i = 0; i < 6; i++) g.add(mesh(box(0.42, 0.18, 1.85), L(i % 2 ? 0xfff6e3 : 0xff7bac), -1.05 + i * 0.42, 2.05, 0, false));
+    const lb = label('奶昔补给站', '#fff6e3', '#3a2b20', 1.9); lb.position.set(0, 2.55, 0); g.add(lb);
+    for (let i = 0; i < 3; i++) {
+      g.add(mesh(cyl(0.11, 0.09, 0.3, 10), T([0xffb3c9, 0xb3e0ff, 0xffd93f][i]), -0.5 + i * 0.5, 1.72, 0.55, false));
+    }
+    return g;
+  }
+  function crosswalk() {
+    const g = new THREE.Group();
+    for (let i = 0; i < 9; i++) g.add(mesh(box(0.52, 0.018, 2.2), Basic(0xe9e9e2), -3.1 + i * 0.78, 0, 0, false));
     return g;
   }
   function lamp() {
@@ -408,6 +542,24 @@ const Models = (() => {
     g.add(mesh(box(0.6, 0.2, 0.3), gl, 0, 0.4, -2.0, false));
     return g;
   }
+  function sidewalkTexture() {
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 256;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#e5ddd0'; c.fillRect(0, 0, 256, 256);
+    c.strokeStyle = '#c9c0b5'; c.lineWidth = 3;
+    for (let y = 0; y <= 256; y += 64) {
+      c.beginPath(); c.moveTo(0, y); c.lineTo(256, y); c.stroke();
+      const offset = (y / 64) % 2 ? 32 : 0;
+      for (let x = offset; x <= 256; x += 64) {
+        c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + 64); c.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = 8;
+    return tex;
+  }
   function skyDome() {
     const cv = document.createElement('canvas');
     cv.width = 4; cv.height = 256;
@@ -423,10 +575,15 @@ const Models = (() => {
   }
   function city() {
     const g = new THREE.Group();
-    const m = L(0x8f7fc0);
+    const colors = [0xa394c7, 0x8faac5, 0xc0a4c5, 0x9dbcb7];
     for (let i = 0; i < 24; i++) {
-      const h = 8 + Math.random() * 22;
-      g.add(mesh(box(6, h, 6), m, -90 + i * 8, h / 2, 0, false));
+      const h = 7 + Math.random() * 20, w = 5 + Math.random() * 2;
+      const x = -92 + i * 8;
+      g.add(mesh(box(w, h, 6), L(colors[i % colors.length]), x, h / 2, Math.sin(i * 2.1) * 5, false));
+      g.add(mesh(box(w * 0.72, 1.1, 6.2), L(0x776d99), x, h + 0.55, Math.sin(i * 2.1) * 5, false));
+      if (i % 3 === 0) g.add(mesh(cyl(0.04, 0.04, 3.5, 6), L(0x776d99), x, h + 2.6, 0, false));
+      for (let r = 0; r < Math.floor(h / 3); r++)
+        g.add(mesh(box(w * 0.65, 0.25, 0.04), Basic(0xd9d5e5), x, 2 + r * 2.8, 3.05 + Math.sin(i * 2.1) * 5, false));
     }
     return g;
   }
@@ -444,5 +601,5 @@ const Models = (() => {
     return g;
   }
 
-  return { naiwa, obstacle, truck, memeBall, coin, power, building, lamp, gantry, hedge, post, trackTexture, cloud, sun, skyDome, city, label, iconSprite, T, L, P, Basic };
+  return { naiwa, obstacle, truck, memeBall, coin, power, building, tree, flowerBed, bench, busStop, stall, crosswalk, lamp, gantry, hedge, post, trackTexture, sidewalkTexture, cloud, sun, skyDome, city, label, iconSprite, T, L, P, Basic };
 })();
