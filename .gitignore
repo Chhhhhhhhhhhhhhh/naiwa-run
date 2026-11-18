@@ -1,0 +1,12 @@
+# build output (Qoder Sites artifact)
+dist/
+
+# Qoder local publication descriptor
+*.qoder.site
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
