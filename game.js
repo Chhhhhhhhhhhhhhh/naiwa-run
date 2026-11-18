@@ -102,7 +102,7 @@ const G = {
   shield: 0, sprint: 0, magnet: 0,
   objects: [], buildings: [], nextSpawn: 40, nextBuilding: 5, nextLamp: 20, nextGantry: 60,
   particles: [], shake: 0, deadTimer: 0, phase: 0, airTime: 0, support: 0, jumping: false, speedTier: 0,
-  best: +(localStorage.getItem('naiba-best') || 0),
+  best: +(localStorage.getItem('naiwa-best') || 0),
 };
 
 /* ---------- 场景搭建 ---------- */
@@ -349,7 +349,7 @@ function crash() {
 function showGameOver() {
   G.state = 'over';
   const isRecord = G.score > G.best;
-  if (isRecord) { G.best = G.score; localStorage.setItem('naiba-best', String(G.best)); }
+  if (isRecord) { G.best = G.score; localStorage.setItem('naiwa-best', String(G.best)); }
   document.getElementById('final-score').textContent = G.score;
   document.getElementById('final-coins').textContent = G.coins;
   document.getElementById('final-best').textContent = G.best;

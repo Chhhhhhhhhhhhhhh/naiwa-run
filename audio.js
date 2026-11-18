@@ -3,7 +3,7 @@ const AudioSys = {
   ctx: null,
   master: null,
   bgmGain: null,
-  muted: localStorage.getItem('naiba-muted') === '1',
+  muted: localStorage.getItem('naiwa-muted') === '1',
   noiseBuf: null,
   bgmTimer: null,
   bgmStep: 0,
@@ -55,7 +55,7 @@ const AudioSys = {
 
   setMuted(m) {
     this.muted = m;
-    localStorage.setItem('naiba-muted', m ? '1' : '0');
+    localStorage.setItem('naiwa-muted', m ? '1' : '0');
     if (this.master) this.master.gain.value = m ? 0 : 1;
     if (m && window.speechSynthesis) speechSynthesis.cancel();
   },
