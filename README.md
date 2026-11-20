@@ -37,7 +37,8 @@
 
 ## 特性
 
-- three.js 程序化建模，没有外部 3D 模型、图片或音频素材；
+- 城市场景、障碍和道具主要由 three.js 程序化建模；主角与追捕者使用 `assets/` 中的本地 GLB 模型；
+- 主角 GLB 加载完成前或加载失败时，使用程序化后备模型，不影响开始游戏；
 - 大学城、奶昔商业街、躺平公园三片区域循环切换，建筑配色与招牌随区域变化；
 - 新增行道树、花坛、长椅、公交站、奶昔摊位、斑马线和屋顶设备；
 - 人行道铺装与建筑立面使用程序化贴图，减少重复感并控制绘制开销；
@@ -51,34 +52,38 @@
 
 ## 本地运行
 
-需要一个静态服务器（不要直接双击 `index.html`，浏览器可能拦截部分资源）：
+需要一个静态服务器：
 
 ```bash
-npx serve .
+npx serve . -l 8080
 # 或者
 python -m http.server 8080
 ```
 
-然后打开 http://localhost:8080
+然后打开 http://localhost:8080。游戏会通过 HTTP 加载本地 GLB 模型，请不要直接双击 `index.html` 使用 `file://` 运行。
 
 ## 技术栈
 
-- three.js（`vendor/three.min.js`）
-- 原生 HTML / CSS / JavaScript
+- three.js r128（`vendor/three.min.js`）与 GLTFLoader（`vendor/GLTFLoader.js`）
+- 原生 HTML / CSS / JavaScript，无前端框架、无构建步骤
+- 本地 GLB 角色模型 + three.js 程序化场景与模型
 - WebAudio 实时合成音效 + SpeechSynthesis 语音
 - 字体：Google Fonts - ZCOOL KuaiLe（加载失败会回退系统字体）
 
 ## 目录结构
 
-```
-index.html      页面与 HUD
-game.js         游戏主循环、玩法、碰撞、道具、UI 文案
-models.js       程序化 3D 模型（奶娃、货车、障碍、城市、金币……）
-audio.js        WebAudio 合成音效与语音
-style.css       页面与遮罩层样式
-vendor/         three.js
+```text
+index.html      页面入口、HUD 与菜单/暂停/结算遮罩层
+style.css       页面样式、动画与移动端适配
+game.js         游戏状态、主循环、输入、物理、碰撞、道具与 UI
+models.js       程序化 3D 模型和贴图（后备奶娃、货车、障碍、城市、金币等）
+audio.js        WebAudio 合成音效、BGM、语音与静音控制
+assets/         本地 GLB 角色模型、模型预览图及模型检查辅助脚本
+vendor/         three.js 与 GLTFLoader
 screenshots/    README 截图
 ```
+
+`assets/_*.py` 和 `assets/preview*.png` 仅用于模型制作与检查，不参与游戏运行。游戏运行只需要静态文件服务，不需要安装 Python 依赖。
 
 ## 说明
 
