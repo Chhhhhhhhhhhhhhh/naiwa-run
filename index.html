@@ -12,6 +12,7 @@
 </head>
 <body>
 <div id="stage">
+  <div id="boot-backdrop" aria-hidden="true"></div>
   <div id="popups"></div>
 
   <div id="hud" class="hidden">
@@ -37,9 +38,18 @@
       <div class="howto-item"><span class="key">← →</span><span>闪身步躲障碍</span></div>
       <div class="howto-item"><span class="key">↑ / 空格</span><span>芜湖起飞</span></div>
       <div class="howto-item"><span class="key">↓</span><span>奶蛋出击钻画饼</span></div>
-      <div class="howto-item mobile-hint"><span class="key">📱</span><span>左右滑换道 · 上滑跳 · 下滑铲</span></div>
+    <div class="howto-item mobile-hint"><span class="key">📱</span><span>左右滑换道 · 上滑跳 · 下滑铲</span></div>
+  </div>
+  <div class="loading-panel">
+    <div class="loading-copy">
+      <span id="loading-stage" aria-live="polite">奶娃穿鞋中…</span>
+      <span id="loading-percent">0%</span>
     </div>
-    <button id="btn-start" class="big-btn">开跑！</button>
+    <div class="loading-track" role="progressbar" aria-label="游戏资源加载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <span class="loading-fill" id="loading-fill"></span>
+    </div>
+  </div>
+  <button id="btn-start" class="big-btn">开跑！</button>
     <p class="best-line">最佳纪录：<span id="best-menu">0</span> 米</p>
     <p class="meme-foot" id="menu-tip">温馨提示：跑不过 DDL 是正常的</p>
   </div>

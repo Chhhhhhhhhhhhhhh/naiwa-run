@@ -250,21 +250,76 @@ function riggedCharacter(gltf, height) {
   };
 }
 
+const bootBackdrop = document.getElementById('boot-backdrop');
+let bootBackdropDone = false;
+function revealBootBackdrop() {
+  if (bootBackdropDone) return;
+  bootBackdropDone = true;
+  bootBackdrop?.classList.add('done');
+}
+
 function loadGameArt() {
   const loader = new THREE.GLTFLoader();
+  const artStages = [
+    { label: '奶娃穿鞋中…', progress: 0, failed: false },
+    { label: '豆包老师热身中…', progress: 0, failed: false },
+    { label: '赛道铺设中…', progress: 0, failed: false },
+    { label: '灭霸进场中…', progress: 0, failed: false },
+  ];
+  const elStage = document.getElementById('loading-stage');
+  const elPercent = document.getElementById('loading-percent');
+  const elFill = document.getElementById('loading-fill');
+  const elTrack = document.querySelector('.loading-track');
+  const panel = elStage.closest('.loading-panel');
+  let loadingHideTimer = null;
+  let prewarmed = false;
+  const refreshLoading = () => {
+    const pending = artStages.find(stage => stage.progress < 1);
+    const percent = Math.round(artStages.reduce((sum, stage) => sum + stage.progress, 0) / artStages.length * 100);
+    elStage.textContent = pending ? pending.label
+      : artStages.some(stage => stage.failed) ? '素材走神了，备用造型已就位'
+      : '奶已温好，开跑！';
+    elPercent.textContent = `${percent}%`;
+    elFill.style.width = `${percent}%`;
+    elTrack.setAttribute('aria-valuenow', percent);
+    panel.classList.toggle('ready', !pending && !artStages.some(stage => stage.failed));
+    if (!pending && loadingHideTimer === null) {
+      revealBootBackdrop();
+      loadingHideTimer = setTimeout(() => panel.classList.add('dismissed'), 2000);
+    }
+    if (!pending && !prewarmed) {
+      prewarmed = true;
+      // 放在“奶已温好”的停留时间里预热，避免开跑第一帧集中造模型。
+      setTimeout(prewarmPools, 60);
+    }
+  };
+  const markArt = (index, progress = 1, failed = false) => {
+    const stage = artStages[index];
+    stage.progress = Math.max(stage.progress, progress >= 1 ? 1 : Math.max(0, progress));
+    if (failed) stage.failed = true;
+    refreshLoading();
+  };
+  const artProgress = index => event => {
+    if (event?.lengthComputable) markArt(index, event.loaded / event.total);
+  };
+  refreshLoading();
+
   loader.load('assets/naiwa-runner.glb', gltf => {
+    markArt(0);
     runnerRig = riggedCharacter(gltf, 1.9);
     const skin = runnerRig.model;
     skin.rotation.y = Math.PI; // GLB 面朝 +Z，游戏向 -Z 前进
     skin.position.y -= player.userData.spin.position.y;
     skin.visible = false;
     player.userData.spin.add(skin);
-  }, undefined, err => console.warn('奶娃模型无法载入，使用备用模型', err));
+  }, artProgress(0), err => { markArt(0, 1, true); console.warn('奶娃模型无法载入，使用备用模型', err); });
   loader.load('assets/doubao-teacher.glb', gltf => {
+    markArt(1);
     chaserRig = riggedCharacter(gltf, 2.15);
     chaser.add(chaserRig.model);
-  }, undefined, err => console.warn('豆包老师模型无法载入', err));
+  }, artProgress(1), err => { markArt(1, 1, true); console.warn('豆包老师模型无法载入', err); });
   loader.load('assets/street-kit.glb', gltf => {
+    markArt(2);
     Models.installStreetKit(gltf.scene);
     streetKitReady = true;
     for (const entry of G.buildings) {
@@ -273,6 +328,7 @@ function loadGameArt() {
       replacement.position.copy(entry.mesh.position);
       replacement.rotation.copy(entry.mesh.rotation);
       replacement.scale.copy(entry.mesh.scale);
+      if (entry.key) replacement.userData.poolKey = entry.key;
       Models.setStreetDetail(replacement, entry.far);
       disposeObject(entry.mesh);
       scene.add(replacement);
@@ -285,8 +341,9 @@ function loadGameArt() {
     postOffset = NaN;
     updatePosts();
     needsRender = true;
-  }, undefined, err => console.warn('街景模型无法载入，使用备用街景', err));
+  }, artProgress(2), err => { markArt(2, 1, true); console.warn('街景模型无法载入，使用备用街景', err); });
   loader.load('assets/thanos-obstacle.glb', gltf => {
+    markArt(3);
     Models.installThanos(gltf.scene);
     const instances = (pool['obs:thanos'] ?? []).slice();
     for (const o of G.objects) if (o.type === 'thanos') instances.push(o.mesh);
@@ -296,7 +353,7 @@ function loadGameArt() {
       if (fallback) disposeObject(fallback);
     }
     needsRender = true;
-  }, undefined, err => console.warn('灭霸模型无法载入，使用备用模型', err));
+  }, artProgress(3), err => { markArt(3, 1, true); console.warn('灭霸模型无法载入，使用备用模型', err); });
 }
 
 function menuCharacterX() { return camera.aspect < 0.85 ? 1.7 : 3.05; }
@@ -384,6 +441,26 @@ function release(o) {
   const key = o.kind + ':' + o.type;
   (pool[key] = pool[key] || []).push(o.mesh);
 }
+// 开局前把赛道会用到的模型先造好并塞进对象池，跑图过程中不再临时创建几何/材质。
+const PREWARM_OBSTACLES = ['alarm', 'gang', 'bing', 'thanos', 'emo', 'phone'];
+function prewarmPools() {
+  const fill = (key, count, make) => {
+    const list = pool[key] || (pool[key] = []);
+    while (list.length < count) {
+      const mesh = make();
+      mesh.visible = false;
+      list.push(mesh);
+    }
+  };
+  fill('coin:coin', 40, () => Models.coin());
+  for (const type of ['shield', 'sprint', 'magnet']) fill('power:' + type, 3, () => Models.power(type));
+  for (const type of PREWARM_OBSTACLES) fill('obs:' + type, 3, () => Models.obstacle(type));
+  for (const type of Object.keys(TRUCK_TYPES)) {
+    const T = TRUCK_TYPES[type];
+    fill('obs:' + type, 2, () => Models.truck(T.ramp, pick(TRUCK_COLORS), T.long));
+  }
+  fill('meme:jntm', 1, () => Models.memeBall());
+}
 
 /* ---------- 赛道生成 ---------- */
 function addObs(type, laneX, pos) {
@@ -396,8 +473,24 @@ function addCoin(laneX, pos, y, truck = null) {
   G.objects.push({ kind: 'coin', type: 'coin', wx: laneX, trackPos: pos, baseY: y, truck, resolved: false,
     seed: Math.random() * 10, mesh: acquire('coin', 'coin') });
 }
+const COIN_SPACING = 4.8;
 function addCoinRow(laneX, pos, n = 4, y = 0, truck = null) {
-  for (let i = 0; i < n; i++) addCoin(laneX, pos + i * 2.4, y, truck);
+  for (let i = 0; i < n; i++) addCoin(laneX, pos + i * COIN_SPACING, y, truck);
+}
+function addLaneChangeCoins(fromX, toX, pos) {
+  if (fromX === toX) return;
+  addCoin(fromX, pos - COIN_SPACING, 0);
+  addCoin((fromX + toX) / 2, pos - COIN_SPACING / 2, 0);
+  addCoin(toX, pos, 0);
+}
+function addJumpCoins(fromX, takeoff, fromY, toX, landing, toY, fromTruck = null, toTruck = null) {
+  const count = Math.max(2, Math.round((landing - takeoff) / COIN_SPACING));
+  for (let i = 0; i <= count; i++) {
+    const t = i / count;
+    const arc = 4 * t * (1 - t) * JUMP_V * JUMP_V / (2 * GRAVITY);
+    addCoin(THREE.MathUtils.lerp(fromX, toX, t), THREE.MathUtils.lerp(takeoff, landing, t),
+      THREE.MathUtils.lerp(fromY, toY, t) + arc, t < 0.5 ? fromTruck : toTruck);
+  }
 }
 function addPower(laneX, pos, type = pick(['shield', 'sprint', 'magnet'])) {
   G.objects.push({ kind: 'power', type, wx: laneX, trackPos: pos, resolved: false, seed: Math.random() * 10, mesh: acquire('power', type) });
@@ -445,7 +538,7 @@ function roofCoins(truck, arrival = null, departure = Infinity) {
   }
   const first = Math.max(deckStart + 0.8, (arrival ?? deckStart) + 0.8);
   const last = Math.min(deckEnd - 0.48, departure - 1.05);
-  for (let pos = first; pos <= last; pos += 2.2) {
+  for (let pos = first; pos <= last; pos += COIN_SPACING) {
     addCoin(truck.wx, pos, TRUCK.roofHeight, truck);
   }
 }
@@ -478,7 +571,9 @@ function spawnConvoy(pos) {
   const opening = pos === FIRST_ROAD_SECTION;
   const { route, parallel } = opening ? OPENING_TRUCK_LAYOUT : nextTruckLayout();
   const adjacentTrucks = opening || route.some(([, lane]) => lane === 1);
+  const previousLane = G.openLane;
   G.openLane = pick(LANE_X.filter(x => Math.abs(x - G.openLane) <= LANE_X[2] && (!adjacentTrucks || x !== 0)));
+  addLaneChangeCoins(previousLane, G.openLane, pos);
   const lanes = LANE_X.filter(x => x !== G.openLane);
   if (opening ? lanes[0] !== 0 : Math.random() < 0.5) lanes.reverse();
   const [entryType, entryLane] = route[0];
@@ -487,6 +582,7 @@ function spawnConvoy(pos) {
   for (const [type, lane] of route.slice(1)) {
     const link = extendConvoy(truck, type, lanes[lane], opening);
     roofCoins(truck, arrival, link.takeoff);
+    addJumpCoins(truck.wx, link.takeoff, TRUCK.roofHeight, link.truck.wx, link.arrival, TRUCK.roofHeight, truck, link.truck);
     truck = link.truck;
     arrival = link.arrival;
   }
@@ -497,8 +593,7 @@ function spawnConvoy(pos) {
     if (TRUCK_TYPES[parallel].ramp) roofCoins(staggered);
     end = Math.max(end, truckEnd(staggered));
   }
-  addCoinRow(G.openLane, pos, 4);
-  if (end - pos >= 17) addCoinRow(G.openLane, end - 7.2, 4);
+  addCoinRow(G.openLane, pos, Math.max(2, Math.floor((end - pos) / COIN_SPACING) + 1));
   G.nextConvoy = end + Math.max(43, runningSpeed(end) * rand(2.45, 5.15));
   return end;
 }
@@ -516,12 +611,13 @@ function spawnPattern(pos) {
   if (pos >= G.nextShieldRun) return spawnShieldRun(pos);
 
   // 让奶瓶始终跟着可通行的车道，每组过去后留出下一次换道的距离。
+  const previousLane = G.openLane;
   G.openLane = pick(LANE_X.filter(x => Math.abs(x - G.openLane) <= LANE_X[2]));
+  addLaneChangeCoins(previousLane, G.openLane, pos);
   const sides = LANE_X.filter(x => x !== G.openLane);
   if (Math.random() < 0.5) sides.reverse();
   const row = pick(STREET_ROWS.filter(pattern => pattern !== G.lastStreetRow));
   G.lastStreetRow = row;
-  addCoinRow(G.openLane, pos);
   let end = pos + 7.2;
   for (const [i, slot] of row.entries()) {
     const lane = sides[i];
@@ -533,21 +629,53 @@ function spawnPattern(pos) {
     else if (slot === 'power') addPower(lane, pos);
     else {
       const variants = slot === 'low' ? ['alarm', 'gang'] : ['thanos', 'emo', 'phone'];
-      addObs(slot === 'bing' ? slot : pick(variants), lane, pos + 2.4);
+      const obstaclePos = pos + 2.4;
+      addObs(slot === 'bing' ? slot : pick(variants), lane, obstaclePos);
+      if (slot === 'low') {
+        const airDistance = runningSpeed(obstaclePos) * JUMP_TIME;
+        addJumpCoins(lane, obstaclePos - airDistance / 2, 0, lane, obstaclePos + airDistance / 2, 0);
+      }
     }
   }
+  const coinStart = previousLane === G.openLane ? pos : pos + COIN_SPACING;
+  addCoinRow(G.openLane, coinStart, Math.max(2, Math.floor((end - coinStart) / COIN_SPACING) + 1));
   return end;
 }
-function addScenery(factory, x, pos, rotation = 0, y = 0.1, scale = 1) {
-  const mesh = factory();
-  if (!streetKitReady || factory === Models.crosswalk) Models.batchScenery(mesh);
+const sceneryPools = Object.create(null);
+const SCENERY_POOL_MAX = 24;
+function retireScenery(entry) {
+  const { mesh } = entry;
+  scene.remove(mesh);
+  mesh.visible = false;
+  const key = mesh.userData.poolKey;
+  if (!key) { disposeObject(mesh); return; }
+  const pool = sceneryPools[key] || (sceneryPools[key] = []);
+  if (pool.length < SCENERY_POOL_MAX) pool.push(mesh);
+  else disposeObject(mesh);
+}
+function addScenery(factory, x, pos, rotation = 0, y = 0.1, scale = 1, key = null) {
+  const batch = !streetKitReady || factory === Models.crosswalk;
+  const poolable = Boolean(key) && !batch;
+  const pool = poolable ? (sceneryPools[key] || (sceneryPools[key] = [])) : null;
+  let mesh = pool?.pop();
+  if (mesh) {
+    mesh.visible = true;
+  } else {
+    mesh = factory();
+    if (poolable) mesh.userData.poolKey = key;
+  }
+  if (batch && !mesh.userData.sceneryBatched) {
+    Models.batchScenery(mesh);
+    mesh.userData.sceneryBatched = true;
+  }
   mesh.position.set(x, y, G.distance - pos);
-  mesh.rotation.y = rotation;
+  mesh.rotation.set(0, rotation, 0);
   mesh.scale.setScalar(scale);
   const far = mesh.position.z < -STREET_DETAIL_DISTANCE;
   Models.setStreetDetail(mesh, far);
   scene.add(mesh);
-  G.buildings.push({ trackPos: pos, mesh, far, fallbackFactory: streetKitReady || factory === Models.crosswalk ? null : factory });
+  G.buildings.push({ trackPos: pos, mesh, far, key,
+    fallbackFactory: streetKitReady || factory === Models.crosswalk ? null : factory });
 }
 function spawnBuildings(pos) {
   const district = districtAt(pos), zone = DISTRICTS.indexOf(district);
@@ -559,7 +687,8 @@ function spawnBuildings(pos) {
     const height = zone === 0 ? 7.3 : zone === 1 ? 4.9 : 3.1;
     const angle = -side * (zone === 1 ? 0.52 : 0.39);
     addScenery(() => Models.building(name, sign, color, width, height), side * rand(9.75, 11.5),
-      pos + rand(0.2, 2.8), angle, 0, rand(0.89, 1.07));
+      pos + rand(0.2, 2.8), angle, 0, rand(0.89, 1.07),
+      `building|${name}|${sign}|${color}`);
   }
 }
 function spawnScenery(pos) {
@@ -568,31 +697,31 @@ function spawnScenery(pos) {
   for (const side of [-1, 1]) {
     const facing = side < 0 ? Math.PI / 2 : -Math.PI / 2;
     const addTree = blossom => addScenery(() => Models.tree(blossom), side * rand(5.8, 6.05), pos,
-      rand(-0.38, 0.38), 0.12, rand(0.86, 1.08));
+      rand(-0.38, 0.38), 0.12, rand(0.86, 1.08), `tree|${blossom ? 'blossom' : 'plane'}`);
     // 公交站穿插出现，其余位置按区域使用不同组合
     if (index > 0 && index % 13 === (side < 0 ? 3 : 9)) {
-      addScenery(Models.busStop, side * 5.4, pos, facing);
+      addScenery(Models.busStop, side * 5.4, pos, facing, 0.1, 1, 'busStop');
       continue;
     }
     if (zone === 2) {
       addTree((index + (side > 0 ? 1 : 0)) % 4 === 0);
-      if (index % 3 === 0) addScenery(Models.flowerBed, side * 4.91, pos + 3.8, facing);
-      if (index % 4 === 1) addScenery(Models.bench, side * 5.8, pos + 4, facing);
+      if (index % 3 === 0) addScenery(Models.flowerBed, side * 4.91, pos + 3.8, facing, 0.1, 1, 'flowerBed');
+      if (index % 4 === 1) addScenery(Models.bench, side * 5.8, pos + 4, facing, 0.1, 1, 'bench');
       if (index % 5 === (side < 0 ? 2 : 4)) {
-        addScenery(Models.fountain, side * 7.75, pos + 7.1, 0, 0);
+        addScenery(Models.fountain, side * 7.75, pos + 7.1, 0, 0, 1, 'fountain');
       }
       if (index % 2 === (side < 0 ? 1 : 0)) {
-        addScenery(Models.garden, side * 15.1, pos + 5.5, facing, 0, rand(0.95, 1.24));
-        addScenery(() => Models.tree(false), side * 18.1, pos + 7.7, rand(-0.4, 0.4), 0, rand(1.25, 1.56));
+        addScenery(Models.garden, side * 15.1, pos + 5.5, facing, 0, rand(0.95, 1.24), 'garden');
+        addScenery(() => Models.tree(false), side * 18.1, pos + 7.7, rand(-0.4, 0.4), 0, rand(1.25, 1.56), 'tree|plane');
       }
     } else if (zone === 0) {
       if (index % 2 === 0) addTree(index % 6 === (side < 0 ? 0 : 2));
-      else addScenery(Models.flowerBed, side * 5.05, pos, facing);
-      if (index % 5 === 0 || index % 5 === 2) addScenery(Models.bench, side * 5.8, pos + 3.8, facing);
+      else addScenery(Models.flowerBed, side * 5.05, pos, facing, 0.1, 1, 'flowerBed');
+      if (index % 5 === 0 || index % 5 === 2) addScenery(Models.bench, side * 5.8, pos + 3.8, facing, 0.1, 1, 'bench');
     } else {
-      if (index % 7 === (side < 0 ? 2 : 4)) addScenery(Models.stall, side * 6.0, pos, facing);
+      if (index % 7 === (side < 0 ? 2 : 4)) addScenery(Models.stall, side * 6.0, pos, facing, 0.1, 1, 'stall');
       else if (index % 3 === 0) addTree(false);
-      else addScenery(Models.flowerBed, side * 5.03, pos, facing);
+      else addScenery(Models.flowerBed, side * 5.03, pos, facing, 0.1, 1, 'flowerBed');
     }
   }
 }
@@ -608,15 +737,15 @@ function disposeObject(root) {
 const sceneryStreams = [
   ['nextBuilding', pos => { spawnBuildings(pos); return rand(8.4, 11.1); }],
   ['nextScenery', pos => { spawnScenery(pos); return 14; }],
-  ['nextCrosswalk', pos => { addScenery(Models.crosswalk, 0, pos, 0, 0.031); return 130; }],
+  ['nextCrosswalk', pos => { addScenery(Models.crosswalk, 0, pos, 0, 0.031, 1, 'crosswalk'); return 130; }],
   ['nextLamp', pos => {
     const side = (Math.floor(pos / 16) % 2) ? 1 : -1;
-    addScenery(Models.lamp, side * 4.9, pos, side < 0 ? 0 : Math.PI);
+    addScenery(Models.lamp, side * 4.9, pos, side < 0 ? 0 : Math.PI, 0.1, 1, 'lamp');
     return 16;
   }],
   ['nextGantry', pos => {
     const text = pick([districtAt(pos).name, '奶娃快跑', '加油奥利给', '相信光', '冲鸭', '666']);
-    addScenery(() => Models.gantry(text), 0, pos, 0, 0);
+    addScenery(() => Models.gantry(text), 0, pos, 0, 0, 1, `gantry|${text}`);
     return 50;
   }],
 ];
@@ -640,19 +769,23 @@ function ensureWorld() {
     const end = spawnPattern(G.nextSpawn);
     G.nextSpawn = end + Math.max(7, runningSpeed(end) * 0.52);
   }
-  G.objects = G.objects.filter(o => {
+  // 原地压缩数组，避免每帧 filter 生成新数组增加 GC 停顿。
+  let write = 0;
+  for (const o of G.objects) {
     const T = TRUCK_TYPES[o.type];
     const lastVisible = T
       ? truckEnd(o) + TRUCK.cabOverhang + camera.position.z + 2
       : o.trackPos + 8;
-    if (G.distance < lastVisible) return true;
-    release(o); return false;
-  });
-  G.buildings = G.buildings.filter(b => {
-    if (b.trackPos - G.distance > -10) return true;
-    disposeObject(b.mesh);
-    return false;
-  });
+    if (G.distance < lastVisible) G.objects[write++] = o;
+    else release(o);
+  }
+  G.objects.length = write;
+  write = 0;
+  for (const b of G.buildings) {
+    if (b.trackPos - G.distance > -10) G.buildings[write++] = b;
+    else retireScenery(b);
+  }
+  G.buildings.length = write;
 }
 
 /* ---------- 特效 ---------- */
@@ -1099,8 +1232,8 @@ function updatePosts() {
 }
 function updateWorldMeshes(dt) {
   trackTex.offset.y = -(G.distance / 10);
-  sidewalkTex.offset.y = -(G.distance / 10);
-  lawnTex.offset.y = -(G.distance * 84 / 600);
+  sidewalkTex.offset.y = G.distance / 10;
+  lawnTex.offset.y = G.distance * 84 / 600;
   updatePosts();
   for (const o of G.objects) {
     // 磁铁吸附飞行中的金币：划弧线飞向奶娃，跨过货车时抬高，避免穿模
@@ -1241,7 +1374,11 @@ function updateEffects(dt) {
     p.m.scale.setScalar(Math.max(0.05, p.life / p.max));
     if (p.life <= 0) { p.m.visible = false; partPool.push(p.m); }
   }
-  G.particles = G.particles.filter(p => p.life > 0);
+  let live = 0;
+  for (const p of G.particles) {
+    if (p.life > 0) G.particles[live++] = p;
+  }
+  G.particles.length = live;
   if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 1.8);
   const fovEff = G.speed * (G.sprint > 0 ? 1.55 : 1);
   const fovT = Math.min(86, 62 + Math.max(0, fovEff - 13) * 0.5);
@@ -1265,6 +1402,7 @@ const elScore = document.getElementById('score');
 const elCoins = document.getElementById('coins');
 const elPowerbars = document.getElementById('powerbars');
 let puKey = '';
+const puEls = Object.create(null);
 let shownScore = 0, shownCoins = 0;
 const PU_META = {
   shield: { icon: '🛡️', name: '相信光盾', color: '#ffe066', dur: 1 },
@@ -1288,15 +1426,20 @@ function updateHUD() {
         <span class="pu-track"><span class="pu-fill" style="background:${m.color}"></span></span>
         <span class="pu-time"></span></div>`;
     }).join('');
+    for (const k of active) {
+      puEls[k] = {
+        fill: elPowerbars.querySelector(`#pu-${k} .pu-fill`),
+        time: elPowerbars.querySelector(`#pu-${k} .pu-time`),
+      };
+    }
   }
   for (const k of active) {
-    const m = PU_META[k];
+    const m = PU_META[k], el = puEls[k];
+    if (!el) continue;
     const remain = k === 'shield' ? 1 : G[k];
     const frac = k === 'shield' ? 1 : Math.max(0, G[k] / m.dur);
-    const fill = document.querySelector(`#pu-${k} .pu-fill`);
-    const time = document.querySelector(`#pu-${k} .pu-time`);
-    if (fill) fill.style.width = `${frac * 100}%`;
-    if (time) time.textContent = k === 'shield' ? `${G.shield}次` : `${remain.toFixed(1)}s`;
+    if (el.fill) el.fill.style.width = `${frac * 100}%`;
+    if (el.time) el.time.textContent = k === 'shield' ? `${G.shield}次` : `${remain.toFixed(1)}s`;
   }
 }
 
@@ -1305,7 +1448,7 @@ function resetGame(keepScenery = false) {
   for (const o of G.objects) release(o);
   for (const flight of G.flyingObstacles) releaseFlight(flight);
   if (!keepScenery) {
-    for (const b of G.buildings) disposeObject(b.mesh);
+    for (const b of G.buildings) retireScenery(b);
     Object.assign(G, { buildings: [], nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95 });
   }
   for (const { m } of G.particles) { m.visible = false; partPool.push(m); }
@@ -1325,6 +1468,7 @@ function resetGame(keepScenery = false) {
 }
 function startGame() {
   AudioSys.init(); AudioSys.click(); AudioSys.duckBGM(false);
+  revealBootBackdrop();
   resetGame(G.state === 'menu');
   G.state = 'play';
   chaser.position.set(0, 0, 8);

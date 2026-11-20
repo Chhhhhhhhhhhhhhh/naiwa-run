@@ -156,7 +156,13 @@ const Models = (() => {
     })));
   }
 
-  function label(text, bg = '#fff6e3', fg = '#3a2b20', w = 2.0) {    const cv = document.createElement('canvas');
+  // 同一段文字只画一次画布，Sprite 之间共享贴图，减少跑图时的 canvas 绘制和显存上涨。
+  const labelTextures = new Map();
+  function labelTexture(text, bg, fg) {
+    const key = `${text}|${bg}|${fg}`;
+    let tex = labelTextures.get(key);
+    if (tex) return tex;
+    const cv = document.createElement('canvas');
     cv.width = 256; cv.height = 96;
     const c = cv.getContext('2d');
     c.fillStyle = bg;
@@ -168,9 +174,14 @@ const Models = (() => {
     c.font = 'bold 44px "ZCOOL KuaiLe","Microsoft YaHei",sans-serif';
     c.fillStyle = fg; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText(text, 128, 50);
-    const tex = new THREE.CanvasTexture(cv);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
+    tex = new THREE.CanvasTexture(cv);
+    labelTextures.set(key, tex);
+    return tex;
+  }
+  function label(text, bg = '#fff6e3', fg = '#3a2b20', w = 2.0) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(text, bg, fg), transparent: true, depthTest: true }));
     sp.scale.set(w, w * 96 / 256, 1);
+    sp.userData.sharedAsset = true; // 贴图是共享缓存，回收时不要 dispose
     return sp;
   }
 
@@ -438,13 +449,18 @@ const Models = (() => {
   }
 
   /* ---------- 奶币 / 道具 ---------- */
+  let coinProto = null;
   function coin() {
     // 奶币改为小奶瓶：白色瓶身 + 粉色奶嘴盖，沿用原来的旋转与拾取逻辑
-    const g = new THREE.Group();
-    g.add(mesh(cyl(0.2, 0.24, 0.6, 16), T(0xffffff), 0, 0, 0));
-    g.add(mesh(cyl(0.1, 0.14, 0.16, 12), T(0xff7bac), 0, 0.38, 0));
-    g.rotation.z = -0.35;
-    return g;
+    // 共享同一份几何/材质，跑图时只复制节点，避免每个奶币都新建材质触发着色器重编。
+    if (!coinProto) {
+      coinProto = new THREE.Group();
+      coinProto.add(mesh(cyl(0.2, 0.24, 0.6, 16), T(0xffffff), 0, 0, 0));
+      coinProto.add(mesh(cyl(0.1, 0.14, 0.16, 12), T(0xff7bac), 0, 0.38, 0));
+      coinProto.rotation.z = -0.35;
+      coinProto.traverse(n => { n.userData.sharedAsset = true; }); // 共享几何/材质，回收时不 dispose
+    }
+    return coinProto.clone(true);
   }
 
   const beaconTextures = {};
