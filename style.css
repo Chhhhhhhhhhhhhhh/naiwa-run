@@ -129,9 +129,12 @@ html, body {
   justify-content: center;
   gap: 18px;
   background: radial-gradient(ellipse at 50% 30%, rgba(90, 40, 130, .82), rgba(24, 12, 44, .92));
-  backdrop-filter: blur(3px);
   padding: 20px;
   text-align: center;
+}
+
+#menu {
+  background: radial-gradient(ellipse at 50% 34%, rgba(57, 25, 84, .83), rgba(24, 12, 44, .22) 84%);
 }
 
 .title-wrap { animation: bounceIn .6s cubic-bezier(.2, 1.6, .4, 1); }
@@ -205,6 +208,12 @@ html, body {
   border: 2px solid var(--ink);
   box-shadow: 0 2px 0 var(--ink);
   white-space: nowrap;
+}
+
+.howto-item.mobile-hint { display: none; }
+@media (pointer: coarse) {
+  .howto-item:not(.mobile-hint) { display: none; }
+  .howto-item.mobile-hint { display: flex; }
 }
 
 .big-btn {

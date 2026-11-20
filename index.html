@@ -6,8 +6,9 @@
 <title>奶娃快跑 · 热梗跑酷</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='88'%3E%F0%9F%8D%BC%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="style.css">
+<link rel="preload" href="game.js" as="script">
 </head>
 <body>
 <div id="stage">
@@ -36,7 +37,7 @@
       <div class="howto-item"><span class="key">← →</span><span>闪身步躲障碍</span></div>
       <div class="howto-item"><span class="key">↑ / 空格</span><span>芜湖起飞</span></div>
       <div class="howto-item"><span class="key">↓</span><span>奶蛋出击钻画饼</span></div>
-      <div class="howto-item mobile-hint"><span class="key">📱</span><span>手机滑动屏幕操作</span></div>
+      <div class="howto-item mobile-hint"><span class="key">📱</span><span>左右滑换道 · 上滑跳 · 下滑铲</span></div>
     </div>
     <button id="btn-start" class="big-btn">开跑！</button>
     <p class="best-line">最佳纪录：<span id="best-menu">0</span> 米</p>
@@ -73,6 +74,6 @@
 <script src="vendor/GLTFLoader.js"></script>
 <script src="models.js"></script>
 <script src="audio.js"></script>
-<script src="game.js"></script>
+<script src="boot.js"></script>
 </body>
 </html>
