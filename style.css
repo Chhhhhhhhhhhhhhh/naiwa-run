@@ -431,7 +431,7 @@ button:focus-visible { outline: 3px solid #fff7c9; outline-offset: 5px; }
   .over-stats > div { padding: 8px 14px; }
   .over-stats b { font-size: 22px; }
 }
-/* ---------- Nudge 设计变量（Qoder Sites） ---------- */
+/* ---------- 站点主题变量 ---------- */
 :root {
   --site-bg: #183b37;
   --site-fg: #fff6e3;

@@ -2,9 +2,9 @@
 
 在大学城、奶昔商业街和躺平公园一路跑酷。可以跟着奶瓶走地面，也可以沿斜坡上货车、踩着车顶箭头连跳。
 
-**在线试玩**　[Qoder Sites](https://naiwa-run-z5gt91cnxll.qoder.zone/) · [GitHub Pages](https://chhhhhhhhhhhhhhh.github.io/naiwa-run/)
+**在线试玩**　[网页版](https://chhhhhhhhhhhhhhh.github.io/naiwa-run/)
 
-电脑和手机都可以直接在浏览器开跑。[v1.1.0 更新说明](https://github.com/Chhhhhhhhhhhhhhh/naiwa-run/releases/tag/v1.1.0)
+电脑和手机都可以直接在浏览器开跑。[版本记录](https://github.com/Chhhhhhhhhhhhhhh/naiwa-run/releases)
 
 ## 截图
 

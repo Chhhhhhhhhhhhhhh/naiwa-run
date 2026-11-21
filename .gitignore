@@ -1,8 +1,8 @@
-# build output (Qoder Sites artifact)
+# build output
 dist/
 
-# Qoder local publication descriptor
-*.qoder.site
+# local publishing descriptors
+*.site
 
 # OS noise
 .DS_Store
