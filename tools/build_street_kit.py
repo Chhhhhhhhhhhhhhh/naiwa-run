@@ -11,7 +11,7 @@ from mathutils import Vector
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from blender_scene_mesh import MeshDraft, export_glb, painted_material, save_source
+from blender_scene_mesh import MeshDraft, color, export_glb, painted_material, save_source
 
 
 STONE = 'e6d2b5'
@@ -20,7 +20,6 @@ BASE = '9d9f98'
 IRON = '314951'
 GLASS = '537b88'
 DARK_GLASS = '42636e'
-GLINT = 'a1bec0'
 WOOD = 'ad7650'
 TILE = '657a74'
 WHITE = 'f5e9d3'
@@ -36,15 +35,30 @@ def cornice(draft, width, depth, z, paint=STONE):
     draft.box((0, 0, z), (width + 0.36, depth + 0.3, 0.18), paint, 0.036)
     draft.box((0, 0, z - 0.125), (width + 0.16, depth + 0.15, 0.075), MORTAR)
 
+    # Small brackets cast a band of shadow under the projecting cornice.
+    for i in range(round(width / .48)):
+        x = -width / 2 + .25 + i * .48
+        draft.box((x, depth / 2 + .078, z - .208), (.118, .175, .099), paint)
+
+
+def glazing(draft, x, y, z, width, height, paint):
+    left, right = x - width / 2, x + width / 2
+    bottom, top = z - height / 2, z + height / 2
+    corners = [(left, bottom, .61), (left, top, .99),
+               (right, top, .99), (right, bottom, .61)]
+    draft.face([draft.vertex((px, y, pz), color(paint, shade)) for px, pz, shade in corners])
+
 
 def bay(draft, x, front, z, width, height, frame=STONE, glass=GLASS, split=True):
-    draft.box((x, front + 0.019, z), (width + 0.17, 0.09, height + 0.16), frame, 0.018)
-    draft.box((x, front + 0.07, z), (width, 0.045, height), IRON, 0.008)
-    draft.box((x, front + 0.093, z), (width - 0.097, 0.02, height - 0.105), glass)
-    draft.box((x, front + 0.112, z + height * 0.32), (width - 0.1, 0.016, 0.035), GLINT)
-    draft.box((x, front + 0.13, z - height / 2 - 0.08), (width + 0.26, 0.24, 0.077), frame, 0.015)
+    draft.box((x, front + .024, z), (width + .17, .105, height + .17), frame, .019)
+    draft.box((x, front + .077, z), (width, .037, height), IRON)
+    glazing(draft, x, front + .098, z, width - .093, height - .107, glass)
+    draft.box((x, front + .118, z + height * .24), (width - .054, .044, .049), IRON)
+    draft.box((x, front + .12, z - height / 2 - .108), (width + .19, .20, .048), MORTAR)
+    draft.box((x, front + .15, z - height / 2 - .062), (width + .26, .252, .077), frame, .019)
+    draft.box((x, front + .108, z + height / 2 + .064), (width + .23, .184, .079), frame, .019)
     if split:
-        draft.box((x - width * 0.07, front + 0.117, z), (0.048, 0.044, height), IRON)
+        draft.box((x - width * .07, front + .123, z), (.049, .056, height), IRON)
 
 
 def side_bays(draft, width, depth, floors, trim=STONE):
@@ -66,6 +80,9 @@ def arch(radius, spring, bottom, x=0):
 
 
 def steps(draft, x, front, width):
+    draft.box((x, front + .86, .032), (width + .18, .83, .055), MORTAR)
+    for edge in (-1, 1):
+        draft.box((x + edge * (width / 2 + .064), front + .87, .057), (.078, .83, .097), STONE)
     for i in range(3):
         draft.box((x, front + 0.34 - i * 0.10, 0.041 + i * 0.062),
                   (width - i * 0.13, 0.61, 0.08 + i * 0.124), STONE, 0.013)
@@ -82,6 +99,21 @@ def archway(draft, x, front, spring, radius, bottom):
                   (0.09, 0.06, 0.083), WHITE, 0.012)
     draft.box((x, front + 0.237, (spring + bottom) / 2), (0.064, 0.056, spring - bottom), WOOD, 0.006)
     draft.box((x, front + 0.24, spring), (radius * 2, 0.045, 0.053), IRON)
+    for s in (-1, 1):
+        arc_end = (x + s * radius * .58, spring + radius * .67)
+        draft.tube([(x,front+.245,spring), (arc_end[0],front+.245,arc_end[1])],
+                   [.02,.02], MORTAR, 5)
+        if bottom < 1:
+            draft.box((x + s * .132, front + .265, bottom + .81), (.047,.061,.207), GOLDEN, .012)
+
+
+def facade_lantern(draft, x, front, z):
+    draft.box((x,front+.05,z+.11),(.152,.12,.28),IRON,.023)
+    draft.box((x,front+.18,z),(.158,.211,.251),'edd6a0',.028)
+    for lift in (-.14,.14):
+        draft.box((x,front+.18,z+lift),(.205,.253,.068),IRON,.019)
+    for side in (-1,1):
+        draft.box((x+side*.079,front+.26,z),(.025,.037,.244),IRON)
 
 
 def library():
@@ -101,8 +133,11 @@ def library():
         for col, x in enumerate((s * 1.84, s * 2.68)):
             bay(draft, x, 2.20, 1.77, 0.59, 1.6, STONE, '698b92' if col else GLASS)
             bay(draft, x, 2.20, 4.54, 0.62, 1.53)
-        for z in (0.64, 0.84, 2.89, 3.69, 5.61, 5.80):
-            draft.box((s * 2.27, 2.217, z), (1.66, 0.038, 0.043), 'a66858')
+        for row, z in enumerate((.64, .84, 2.92, 3.68, 5.55, 5.76, 5.97)):
+            for index in range(3):
+                x = s * (1.64 + index * .60 + (row % 2) * .12)
+                draft.box((x, 2.221, z), (.50, .046, .026), ('a66858','c78671')[(row + index) % 2])
+        facade_lantern(draft, s*1.115, 2.51, 1.41)
     archway(draft, 0, 2.43, 1.55, 0.83, 0.19)
     archway(draft, 0, 2.43, 4.45, 0.60, 3.63)
     draft.box((0, 2.48, 2.94), (2.14, 0.29, 0.43), IRON, 0.048)
@@ -119,13 +154,16 @@ def academic_hall():
     draft.box((-1.46, -0.63, 9.17), (2.26, 1.94, 0.12), TILE, 0.03)
     draft.profile(1.68, [(8.48, 0.58, 0.58, -0.3), (8.55, 0.65, 0.65, -0.3),
                          (9.18, 0.65, 0.65, -0.3), (9.32, 0.43, 0.43, -0.3)], '6c9391', 14)
-    draft.box((0, 2.28, 4.87), (1.6, 0.22, 6.7), '538289', 0.027)
+    draft.box((0, 2.28, 4.87), (1.6, 0.22, 6.7), '41686d', 0.027)
+    for row, z in enumerate((2.10,3.17,4.24,5.35,6.44,7.54)):
+        glazing(draft, 0, 2.397, z, 1.52, .96, ('699797','5d888e','6f9392')[row % 3])
     for x in (-0.78, -0.24, 0.24, 0.78):
         draft.box((x, 2.414, 4.86), (0.052, 0.085, 6.65), WHITE)
     for z in (1.58, 2.66, 3.72, 4.82, 5.92, 7.01, 8.08):
         draft.box((0, 2.413, z), (1.63, 0.087, 0.052), IRON)
     for side in (-1, 1):
         draft.box((side * 1.95, 2.32, 4.83), (2.46, 0.36, 6.91), 'bcb39c', 0.045)
+        draft.box((side * 3.04, 2.54, 4.66), (.148, .293, 7.29), STONE, .026)
         for row, z in enumerate((2.30, 4.02, 5.75, 7.36)):
             for x in (side * 1.41, side * 2.53):
                 bay(draft, x, 2.5, z, 0.80, 1.13, WHITE, ('537a80', '83a5a2', 'cbae77')[row % 3])
@@ -157,6 +195,10 @@ def dormitory():
                 draft.box((x - 0.72 + step * 0.24, 2.59, z - 0.30), (0.041, 0.05, 0.59), IRON)
             for offset in (-0.76, 0.76):
                 draft.box((x + offset, 2.32, z - 0.025), (0.05, 0.59, 0.053), IRON)
+            if x != 0:
+                draft.box((x + .31, 2.57, z - .27), (.52, .21, .18), 'a76757', .028)
+                for n in (-.16, .12):
+                    draft.ellipsoid((x+.31+n,2.56,z-.15),(.17,.13,.11),'728e6c',7,4)
     for x in (-2.0, 2.0):
         bay(draft, x, 2.025, 1.04, 1.07, 1.2)
     draft.box((0, 2.09, 0.92), (1.38, 0.15, 1.68), IRON, 0.033)
@@ -164,6 +206,8 @@ def dormitory():
     for side in (-1, 1):
         draft.box((side * 0.55, 2.25, 1.02), (0.067, 0.15, 0.29), GOLDEN, 0.025)
     draft.box((0, 2.19, 1.87), (1.81, 0.46, 0.15), '8e625a', 0.04)
+    for side in (-1, 1):
+        facade_lantern(draft, side*.89, 2.035, 1.405)
     side_bays(draft, 5.9, 4.05, (1.06, 2.55, 4.12, 5.71), 'e5bc9c')
     return draft
 
@@ -192,7 +236,7 @@ def storefront(market=False):
                                 (0.20, 0.17, 0.12), '779577', 8, 5)
     draft.box((0, front + 0.116, 1.17), (width * 0.93, 0.17, 1.81), IRON, 0.026)
     for x in (-w * 0.61, w * 0.61):
-        draft.box((x, front + 0.21, 1.22), (width * 0.332, 0.058, 1.62), '8ba5a0', 0.015)
+        glazing(draft, x, front + .25, 1.22, width*.332, 1.62, '8ba5a0')
         draft.box((x, front + 0.248, 0.84), (width * 0.333, 0.063, 0.073), dark)
         draft.box((x, front + 0.25, 1.24), (0.055, 0.07, 1.58), WHITE)
         for j in range(4):
@@ -208,6 +252,9 @@ def storefront(market=False):
         x = (i - 5) * stripe_w
         paint = band if i % 2 == 0 or market else WHITE
         awning_stripe(draft, x, front + 0.10, 2.035, stripe_w, 0.73, paint, drop=0.27)
+    for side in (-1, 1):
+        facade_lantern(draft, side*.78, front+.13, 1.49)
+        draft.box((side*w*.95,front+.10,1.01),(.164,.225,1.62),dark,.03)
     side_bays(draft, width, depth, (1.28, 3.96 if not market else 4.52), WHITE)
     steps(draft, 0, front + 0.13, 1.6)
     return draft
@@ -243,6 +290,9 @@ def pavilion():
         draft.tube([(x, -2.05, z), (x, 0, z + 0.047), (x, 2.06, z)],
                    [0.039, 0.047, 0.039], '90a693', 6)
     draft.box((0, 1.89, 2.79), (2.83, 0.20, 0.36), '6c745e', 0.05)
+    for x in (-2.12, 2.12):
+        draft.tube([(x,1.66,2.88),(x,1.66,2.59)],[.024,.024],IRON,6)
+        facade_lantern(draft,x,1.49,2.46)
     draft.box((0, -1.15, 0.76), (3.8, 0.43, 0.15), WOOD, 0.027)
     steps(draft, 0, 2.13, 2.78)
     return draft
@@ -423,6 +473,207 @@ def garden():
     return draft
 
 
+def clock_tower():
+    draft = MeshDraft()
+    brick, copper = 'aa715c', '537e76'
+    draft.box((0, .28, .046), (6.25, 5.0, .088), 'b19f84', .04)
+    draft.box((0, 0, .37), (3.64, 3.04, .68), BASE, .08)
+    draft.box((0, 0, 3.88), (2.72, 2.64, 7.24), brick, .10)
+    for level in (.32, 2.79, 5.72, 7.53):
+        draft.box((0, 0, level - .08), (2.89, 2.79, .096), '9c8269')
+        draft.box((0, 0, level), (3.04, 2.89, .13), 'c1aa8f', .033)
+    for side in (-1, 1):
+        for depth in (-1.247, 1.247):
+            draft.box((side * 1.26, depth, 3.09), (.24, .25, 5.36), 'bc9274', .038)
+        bay(draft, side * .59, 1.337, 4.3, .53, 1.1, 'c8b297', DARK_GLASS, split=False)
+        facade_lantern(draft, side * 1.12, 1.33, 1.48)
+    archway(draft, 0, 1.38, 1.43, .62, .27)
+    draft.box((0, 1.53, 2.43), (2.51, .40, .52), IRON, .054)
+    steps(draft, 0, 1.38, 1.88)
+    for face in (-1, 1):
+        for radius, depth, paint in [(.84, 1.38, '866547'), (.752, 1.462, 'c4a370'), (.665, 1.524, 'e5d4ac')]:
+            circle = [(radius * math.cos(i * math.tau / 28),
+                       6.63 + radius * math.sin(i * math.tau / 28)) for i in range(28)]
+            draft.plate(circle, face * depth, .098, paint, .019)
+        for hour in range(12):
+            angle = hour * math.tau / 12
+            h = (math.sin(angle), math.cos(angle))
+            draft.tube([(h[0] * length, face * 1.58, 6.63 + h[1] * length) for length in (.492, .588)],
+                       [.018, .018], '615c4a', 5)
+        draft.tube([(-.25, face * 1.59, 6.49), (0, face * 1.59, 6.63), (.38, face * 1.59, 6.92)],
+                   [.028, .043, .021], IRON, 6)
+    tiers = [(7.59, 1.62), (7.82, 1.57), (8.57, 1.06), (9.5, .32), (9.77, .17)]
+    draft.rings([[(x * w, y * w, z) for x, y in [(-1, -1), (1, -1), (1, 1), (-1, 1)]]
+                 for z, w in tiers], copper, shade=lambda row, _: .80 + .05 * row)
+    for x in (-1, 1):
+        for y in (-1, 1):
+            draft.tube([(x * w, y * w, z + .035) for z, w in tiers], [.062, .054, .045, .036, .034], '78998a', 6)
+    draft.tube([(0, 0, 9.71), (0, 0, 10.77)], [.061, .034], 'b79359', 9)
+    draft.ellipsoid((0, 0, 10.08), (.16, .16, .143), 'c7a86c', 12, 6)
+    draft.plate([(0, 10.69), (.79, 10.63), (.59, 10.44), (.08, 10.42)], 0, .043, 'b95c49')
+    for x in (-2.57, 2.57):
+        draft.box((x, .9, .15), (.81, 2.1, .24), STONE, .049)
+        for y in (-.03, .54, 1.09, 1.5):
+            draft.ellipsoid((x, y, .39), (.36, .36, .26), '71885a', 9, 5, y * .6, .12)
+    return draft
+
+
+def milk_court():
+    draft = MeshDraft()
+    red, mint = 'bb7168', '507d74'
+    draft.box((0, .37, .075), (6.0, 4.63, .148), 'b5a68d', .052)
+    draft.box((0, -.15, .71), (4.21, 2.8, 1.26), 'd0a68a', .085)
+    draft.box((0, 1.26, 1.29), (4.47, .56, .20), '736357', .043)
+    draft.box((0, -.22, 1.81), (4.19, .17, 1.12), '6f9e92', .026)
+    for x in (-2.03, 2.03):
+        for y in (-1.43, 1.36):
+            draft.box((x, y, 1.49), (.17, .16, 2.69), mint, .027)
+        facade_lantern(draft, x * .88, 1.28, 1.86)
+    draft.box((0, -.22, 2.8), (4.61, 3.05, .28), mint, .059)
+    for i in range(9):
+        awning_stripe(draft, (i - 4) * .495, .79, 2.28, .495, 1.48,
+                      red if i % 2 == 0 else 'e5ceaa', .44)
+    draft.box((0, 1.60, 2.56), (3.33, .27, .59), '80635b', .042)
+    # The oversized shake is the shop sign visible over the nearby rooflines.
+    draft.profile(0, [(2.86, .62, .58, -.14), (3.02, .83, .73, -.14), (4.10, .94, .82, -.14),
+                      (4.71, 1.042, .93, -.14), (4.89, 1.05, .94, -.14)], 'd7948b', 20)
+    draft.profile(0, [(3.65, .910, .798, -.14), (4.09, .959, .838, -.14)], 'e9cfad', 20)
+    draft.profile(0, [(4.86, 1.08, .962, -.14), (4.99, 1.09, .962, -.14),
+                      (5.07, 1.04, .93, -.14)], 'e9cfad', 20)
+    draft.profile(0, [(5.049, .94, .846, -.14), (5.19, .86, .76, -.14),
+                      (5.39, .67, .60, -.14), (5.47, .45, .44, -.14)], 'efdec4', 20)
+    draft.tube([(.14, -.21, 5.43), (.34, -.21, 6.06), (.53, -.21, 6.24),
+                (.81, -.21, 6.27)], [.093, .093, .093, .093], 'a95e58', 10)
+    draft.tube([(.24, -.21, 5.75), (.275, -.21, 5.86)], [.098, .098], 'ead7b9', 10)
+    for i in range(6):
+        x = (i - 2.5) * .50
+        draft.profile(x, [(1.4, .068, .068, 1.22), (1.62, .108, .108, 1.22),
+                          (1.66, .104, .104, 1.22)], ('c58778', 'e3c598', '8bb09e')[i % 3], 9)
+    for x in (-2.54, 2.54):
+        draft.box((x, 1.34, .23), (.72, .74, .37), WOOD, .039)
+        for i in range(3):
+            draft.ellipsoid((x + .18 * (i - 1), 1.40, .48), (.17, .16, .108), ('6d8d6b', '829966')[i % 2], 8, 5)
+    return draft
+
+
+def bunting():
+    draft = MeshDraft()
+    reach = 4.54
+
+    def wire_z(x):
+        return 6.55 + .73 * (x / reach) ** 2
+
+    draft.tube([(reach * (i / 9 - 1), .04, wire_z(reach * (i / 9 - 1))) for i in range(19)],
+               [.016] * 19, '675b4b', 5)
+    for i in range(13):
+        x = (i - 6) * .66
+        draft.plate([(x - .245, wire_z(x - .245)), (x + .246, wire_z(x + .246)),
+                     (x + .019, wire_z(x) - .42)], .065, .032,
+                    ('bb6d61', 'd6aa68', '749d8f', 'e0c7a2')[i % 4], .004)
+    return draft
+
+
+def poplar():
+    draft = MeshDraft()
+    draft.tube([(0, 0, -.02), (.095, .08, 1.16), (.09, 0, 2.68), (-.09, -.12, 4.73)],
+               [.212, .164, .083, .028], '746758', 9)
+    for x, y, z, width, height, tone in [
+        (.15, .06, 3.73, .88, 1.48, '73976d'), (-.17, .14, 4.74, .74, 1.50, '85a079'),
+        (-.39, -.26, 3.22, .76, 1.31, '678a69'), (.35, -.22, 4.25, .70, 1.37, '8aa57b'),
+        (-.10, 0, 5.4, .45, .97, '96b086'),
+    ]:
+        draft.ellipsoid((x, y, z), (width, width * .81, height), tone, 9, 7, -x * .24, .16)
+    return draft
+
+
+def park_pond():
+    draft = MeshDraft()
+    rng = random.Random(2652)
+    extent = (4.72, 7.24)
+    sides = 48
+
+    def shore(angle, radius, z):
+        bend = 1 + .073 * math.sin(3 * angle + .8) + .062 * math.cos(2 * angle - .7)
+        return (extent[0] * math.cos(angle) * bend * radius,
+                extent[1] * math.sin(angle) * bend * radius, z)
+
+    angles = [i * math.tau / sides for i in range(sides)]
+    draft.rings([[shore(a, radius, z) for a in angles]
+                 for radius, z in [(1.02, .01), (1.0, .113), (.96, .143)]], '809180')
+    # A colored ring around the edge gives the water a visible shallows.
+    inner = [draft.vertex(shore(a, .73, .151), color('4a7d83', .92 + .08 * math.cos(a))) for a in angles]
+    outer = [draft.vertex(shore(a, .924, .151), color('749f94')) for a in angles]
+    draft.face(inner)
+    for i in range(sides):
+        following = (i + 1) % sides
+        draft.face((inner[i], outer[i], outer[following], inner[following]))
+    for i in range(16):
+        x, y, _ = shore(i * math.tau / 16 + .06, .949, 0)
+        size = rng.uniform(.16, .36)
+        draft.ellipsoid((x, y, .13), (size * 1.2, size, size * .61),
+                        ('a2a591', 'a1aa9b', 'a6a18c')[i % 3], 7, 4, i * .4, .14)
+    for x, y, spread in [(-2.4, -4.4, .75), (1.1, 4.58, .63), (2.22, -1.7, .52), (-1.2, 1.9, .51)]:
+        for i in range(4):
+            px, py = x + rng.uniform(-spread, spread), y + rng.uniform(-spread, spread)
+            size = rng.uniform(.11, .26)
+            pad = [draft.vertex((px + size * math.cos(a), py + .85 * size * math.sin(a), .165), color('5f8e69'))
+                   for a in (.24, .85, 1.47, 2.09, 2.7, 3.31, 3.93, 4.54, 5.15, 5.84)]
+            draft.face(pad + [draft.vertex((px, py, .165), color('76a174'))])
+            if i == 0:
+                draft.ellipsoid((px, py, .22), (.13, .13, .066), 'dfacaf', 9, 6)
+                draft.ellipsoid((px, py, .27), (.053, .058, .052), 'e4c18c', 8, 5)
+    for i in range(18):
+        x, y, _ = shore(rng.uniform(.08, 5.96), rng.uniform(.1, .83), 0)
+        w = rng.uniform(.12, .56)
+        face = [draft.vertex((x + offset_x, y + offset_y, .156), color('94bbad', shade))
+                for offset_x, offset_y, shade in [(-w, 0, .80), (0, -.063, .95), (w, -.028, .82), (.17, .02, .92)]]
+        draft.face(face)
+    for a in (1.05, 1.83, 2.46, 3.34, 4.36):
+        x, y, _ = shore(a, .95, .0)
+        for i in range(6):
+            h = rng.uniform(.42, .88)
+            px, py = x + rng.uniform(-.26, .26), y + rng.uniform(-.29, .29)
+            draft.tube([(px, py, .13), (px + .05, py - .06, h), (px + .12, py - .08, h + .16)],
+                       [.025, .019, .009], ('7c9264', '80905a')[i % 2], 5)
+            if i % 3 == 0:
+                draft.ellipsoid((px + .077, py - .061, h + .055), (.047, .052, .132), '9f845c', 7, 4, -.21)
+    for i in range(7):
+        x = 4.15 + .074 * math.sin(i * .8)
+        draft.box((x, -2.15 + i * .46, .208), (1.22, .437, .103),
+                  ('a98162', 'b48c6c', 'a47d60')[i % 3], .027)
+    return draft
+
+
+def park_walk():
+    draft = MeshDraft()
+    path = [(-5.38, 3.8), (-4.54, 3.55), (-3.34, 3.14), (-2.31, 2.52), (-1.43, 1.81),
+            (-.72, .91), (.02, -.18), (.54, -1.37), (1.13, -2.49), (2.08, -3.62), (3.18, -4.50), (4.48, -4.89)]
+    rows = []
+    for i, (x, y) in enumerate(path):
+        ax, ay = path[max(0, i - 1)]
+        bx, by = path[min(len(path) - 1, i + 1)]
+        length = math.hypot(bx - ax, by - ay)
+        nx, ny = (ay - by) / length, (bx - ax) / length
+        rows.append([draft.vertex((x + nx * w, y + ny * w, .043),
+                                  color(paint, .92 + .05 * math.sin(i * .9)))
+                     for w, paint in [(-.67, '958a70'), (-.53, 'baad90'),
+                                      (.53, 'c5b99b'), (.67, '938972')]])
+    for near, far in zip(rows, rows[1:]):
+        for i in range(len(near) - 1):
+            draft.face((near[i], far[i], far[i + 1], near[i + 1]))
+    for x, y in [(-2.54, 4.07), (-3.32, 1.68), (.06, -2.5), (1.8, -1.81), (3.55, -5.6)]:
+        for i in range(3):
+            draft.ellipsoid((x + .37 * (i - 1), y + .18 * math.sin(i), .18 + i * .027),
+                            (.41, .44, .25), ('628664', '798f61', '8b9e6c')[i], 8, 4, .2, .10)
+        for i in range(5):
+            dx = .22 * (i - 2)
+            z = .23 + .13 * math.sin(1 + i * .64)
+            draft.tube([(x + dx, y - .31, .04), (x + dx + .032, y - .38, z)], [.016, .012], '5f7c57', 5)
+            draft.ellipsoid((x + dx + .032, y - .38, z), (.073, .069, .048),
+                            ('dc9c89', 'dec891', 'ae859e')[i % 3], 7, 4)
+    return draft
+
+
 def gate():
     draft = MeshDraft()
     for side in (-1, 1):
@@ -456,6 +707,8 @@ def presentation(objects, material):
         'MilkStall': (5.9, 14), 'StreetLamp': (-5.3, 1), 'FlowerPlanter': (5.2, 0),
         'CedarBench': (5.61, 8), 'ParkFountain': (-6.6, 27), 'StreetGate': (0, 16),
         'StreetBollard': (-4.7, 2.8), 'ParkGarden': (9.5, 28.5),
+        'CampusClock': (-10, 17.2), 'MilkCourt': (10.4, 27.6), 'MarketBunting': (0, 16),
+        'ParkPond': (-11.6, 37.0), 'ParkPoplar': (14.6, 33.9), 'ParkWalk': (11.8, 40.5),
     }
     for obj in objects:
         x, y = locations[obj.name]
@@ -464,27 +717,27 @@ def presentation(objects, material):
         if abs(x) > 7:
             obj.rotation_euler.z = math.copysign(-0.48, x)
     platform = MeshDraft()
-    platform.box((0, 13, -0.13), (30, 44, 0.25), '8ba17b', 0.11)
-    platform.box((0, 13, 0), (7.65, 44, 0.07), '657179')
+    platform.box((0, 19, -0.13), (34, 54, 0.25), '8ba17b', 0.11)
+    platform.box((0, 19, 0), (7.65, 54, 0.07), '657179')
     for side in (-1, 1):
-        platform.box((side * 5.16, 13, 0.018), (2.53, 44, 0.112), STONE, 0.015)
-        platform.box((side * 1.22, 13, 0.039), (0.064, 44, 0.008), WHITE)
+        platform.box((side * 5.16, 19, 0.018), (2.53, 54, 0.112), STONE, 0.015)
+        platform.box((side * 1.22, 19, 0.039), (0.064, 54, 0.008), WHITE)
     platform.object('Example street and sidewalks', material)
     scene = bpy.context.scene
     data = bpy.data.cameras.new('Street overview')
     camera = bpy.data.objects.new('Street overview', data)
     scene.collection.objects.link(camera)
-    camera.location = (23, -18, 21)
-    camera.rotation_euler = (Vector((0, 12, 2)) - camera.location).to_track_quat('-Z', 'Y').to_euler()
+    camera.location = (27, -23, 26)
+    camera.rotation_euler = (Vector((0, 18, 2.2)) - camera.location).to_track_quat('-Z', 'Y').to_euler()
     data.type = 'ORTHO'
-    data.ortho_scale = 47
+    data.ortho_scale = 55
     scene.camera = camera
     for screen in bpy.data.screens:
         for area in screen.areas:
             if area.type == 'VIEW_3D':
                 area.spaces.active.region_3d.view_rotation = camera.rotation_euler.to_quaternion()
-                area.spaces.active.region_3d.view_location = (0, 13, 1.4)
-                area.spaces.active.region_3d.view_distance = 39
+                area.spaces.active.region_3d.view_location = (0, 19, 1.7)
+                area.spaces.active.region_3d.view_distance = 46
     return camera
 
 
@@ -525,6 +778,8 @@ def main():
         'CedarBench': bench(), 'BusShelter': shelter(), 'MilkStall': milk_stall(),
         'StreetLamp': street_lamp(), 'ParkFountain': fountain(), 'StreetGate': gate(),
         'StreetBollard': bollard(), 'ParkGarden': garden(),
+        'CampusClock': clock_tower(), 'MilkCourt': milk_court(), 'MarketBunting': bunting(),
+        'ParkPond': park_pond(), 'ParkPoplar': poplar(), 'ParkWalk': park_walk(),
     }
     objects = [draft.object(name, material) for name, draft in drafts.items()]
     distant = make_distant_meshes(objects)

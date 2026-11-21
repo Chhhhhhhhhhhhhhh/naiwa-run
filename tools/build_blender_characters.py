@@ -607,6 +607,40 @@ def reference_views(ref, output):
                 space.shading.type = 'MATERIAL'
 
 
+def export_character(rig, meshes, key):
+    # The game uses one joined skinned mesh per actor.
+    bpy.ops.object.select_all(action='DESELECT')
+    for mesh in meshes:
+        mesh.select_set(True)
+    body = meshes[0]
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.join()
+    body.name = ('Doubao' if key == 'doubao-teacher' else 'Naiwa') + ' mesh'
+    rig.select_set(True)
+    result = bpy.ops.export_scene.gltf(
+        filepath=str(ROOT/'assets'/(key+'.glb')),export_format='GLB',use_selection=True,
+        export_image_format='JPEG',export_jpeg_quality=92,export_animations=True,
+        export_animation_mode='NLA_TRACKS',export_anim_slide_to_zero=True,
+        export_optimize_animation_size=True,export_frame_range=False,export_cameras=False,
+        export_lights=False,
+    )
+    if 'FINISHED' not in result:
+        raise RuntimeError(f'Could not export {key}: {result}')
+
+
+def reanimate(source_dir, out_dir, key):
+    bpy.ops.wm.open_mainfile(filepath=str(source_dir/(key+'.blend')))
+    rig = next(obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE')
+    old_actions = {strip.action for track in rig.animation_data.nla_tracks for strip in track.strips}
+    rig.animation_data_clear()
+    for action in old_actions:
+        bpy.data.actions.remove(action)
+    write_actions(rig, key == 'doubao-teacher')
+    bpy.context.preferences.filepaths.save_version = 0
+    bpy.ops.wm.save_as_mainfile(filepath=str(out_dir/(key+'.blend')),compress=True)
+    export_character(rig, [obj for obj in rig.children if obj.type == 'MESH'], key)
+
+
 def build(filename, out_dir, key):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     is_teacher = key == 'doubao-teacher'
@@ -647,29 +681,19 @@ def build(filename, out_dir, key):
     bpy.context.preferences.filepaths.save_version = 0
     bpy.ops.wm.save_as_mainfile(filepath=str(out_dir/(key+'.blend')),compress=True)
 
-    # The in-game file joins the skinned pieces into a single draw per actor.
-    bpy.ops.object.select_all(action='DESELECT')
-    for mesh in meshes:
-        mesh.select_set(True)
-    body = meshes[0]
-    bpy.context.view_layer.objects.active = body
-    bpy.ops.object.join()
-    body.name = name + ' mesh'
-    rig.select_set(True)
-    result = bpy.ops.export_scene.gltf(
-        filepath=str(ROOT/'assets'/(key+'.glb')),export_format='GLB',use_selection=True,
-        export_image_format='JPEG',export_jpeg_quality=92,export_animations=True,
-        export_animation_mode='NLA_TRACKS',export_anim_slide_to_zero=True,
-        export_optimize_animation_size=True,export_frame_range=False,export_cameras=False,
-        export_lights=False,
-    )
-    if 'FINISHED' not in result:
-        raise RuntimeError(f'Could not export {key}: {result}')
+    export_character(rig, meshes, key)
 
 
 if __name__ == '__main__':
-    dragon_file, teacher_file, directory = sys.argv[sys.argv.index('--')+1:]
+    first, second, directory = sys.argv[sys.argv.index('--')+1:]
     out_dir = Path(directory).resolve()
     out_dir.mkdir(parents=True,exist_ok=True)
-    build(dragon_file,out_dir,'naiwa-runner')
-    build(teacher_file,out_dir,'doubao-teacher')
+    if first == '--reanimate':
+        source_dir = Path(second).resolve()
+        if source_dir == out_dir:
+            raise ValueError('Use a separate output directory for revised Blender sources.')
+        for key in ('naiwa-runner', 'doubao-teacher'):
+            reanimate(source_dir, out_dir, key)
+    else:
+        build(first,out_dir,'naiwa-runner')
+        build(second,out_dir,'doubao-teacher')

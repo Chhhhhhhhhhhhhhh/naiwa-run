@@ -32,6 +32,7 @@ const Models = (() => {
   const cyl = (rt, rb, h, s = 14) => new THREE.CylinderGeometry(rt, rb, h, s);
 
   const streetKit = new Map();
+  const obstacleKit = new Map();
   let thanosAsset = null;
   function preparePaintedAsset(source) {
     const material = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -55,6 +56,10 @@ const Models = (() => {
     preparePaintedAsset(source);
     source.traverse(node => { if (node.isMesh) streetKit.set(node.name, node); });
   }
+  function installObstacleKit(source) {
+    preparePaintedAsset(source);
+    source.traverse(node => { if (node.isMesh) obstacleKit.set(node.name, node); });
+  }
   function installThanos(source) {
     preparePaintedAsset(source);
     thanosAsset = source.getObjectByName('Thanos');
@@ -63,6 +68,10 @@ const Models = (() => {
     const instance = source.clone(false);
     instance.castShadow = castShadow;
     return instance;
+  }
+  function obstaclePart(name) {
+    const source = obstacleKit.get(name);
+    return source ? assetInstance(source, true) : null;
   }
   function streetPart(name) {
     const source = streetKit.get(name);
@@ -76,15 +85,6 @@ const Models = (() => {
     const name = body?.userData.streetModel;
     if (name) body.geometry = streetKit.get(far ? name + 'Far' : name).geometry;
   }
-  function replaceThanosFallback(group) {
-    const fallback = group.userData.thanosFallback;
-    if (!fallback || !thanosAsset) return null;
-    group.remove(fallback);
-    group.add(assetInstance(thanosAsset, true));
-    delete group.userData.thanosFallback;
-    return fallback;
-  }
-
   // Bake each stationary prop's solid pieces into one draw per lighting mode.
   // Textures, translucent glass and text sprites keep their individual materials.
   function batchScenery(root) {
@@ -182,20 +182,6 @@ const Models = (() => {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(text, bg, fg), transparent: true, depthTest: true }));
     sp.scale.set(w, w * 96 / 256, 1);
     sp.userData.sharedAsset = true; // 贴图是共享缓存，回收时不要 dispose
-    return sp;
-  }
-
-  /* 大图标 Sprite（道具/状态标识用） */
-  function iconSprite(emoji, size = 0.9) {
-    const cv = document.createElement('canvas');
-    cv.width = 128; cv.height = 128;
-    const c = cv.getContext('2d');
-    c.font = '100px serif';
-    c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillText(emoji, 64, 70);
-    const tex = new THREE.CanvasTexture(cv);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-    sp.scale.set(size, size, 1);
     return sp;
   }
 
@@ -297,23 +283,48 @@ const Models = (() => {
     }
     aura.visible = false;
     g.add(aura);
-    // 磁吸头顶图标（默认隐藏）
-    const magIcon = iconSprite('🧲', 0.8);
-    magIcon.position.set(0, 2.5, 0);
-    magIcon.visible = false;
-    g.add(magIcon);
-
     // 空中翻转枢轴：绕身体中心旋转，避免绕脚底翻转时穿进地面
     const spin = new THREE.Group();
     spin.position.y = 1.0;
     for (const ch of [...g.children]) { ch.position.y -= 1.0; spin.add(ch); }
     g.add(spin);
 
-    g.userData = { body, belly, arms, legs, torso, egg: eggG, aura, magIcon, spin };
+    g.userData = { body, belly, arms, legs, torso, egg: eggG, aura, spin };
     return g;
   }
 
   /* ---------- 大众化热梗障碍 ---------- */
+  const obstacleLooks = {
+    alarm: ['Alarm', '跳过闹钟', '#8f352d', '#fff2d3', 1.84, 1.48],
+    gang: ['Barrier', '跨过去', '#914c37', '#fff0cd', 1.41, 1.22],
+    bing: ['OilGate', '滑过油饼', '#295c58', '#fff1ca', 1.75, 2.66],
+    emo: ['EmoBoard', 'EMO', '#59456f', '#f8e4f3', 1.27, 2.55],
+    phone: ['Phone', '低头族', '#294d59', '#e4f5ea', 1.48, 2.61],
+  };
+
+  function doubaoFallback() {
+    const g = new THREE.Group();
+    const skin = L(0xeab29b), coat = L(0x32404a), hair = L(0x4e3028);
+    g.add(mesh(cyl(0.23, 0.36, 0.82, 12), coat, 0, 0.94, 0));
+    g.add(mesh(sph(0.36, 16, 12), hair, 0, 1.76, -0.025));
+    g.add(mesh(sph(0.30, 16, 12), skin, 0, 1.69, 0.10));
+    g.add(mesh(cyl(0.239, 0.24, 0.11, 12), L(0xb4483b), 0, 1.34, 0.02));
+    const arms = [];
+    for (const side of [-1, 1]) {
+      g.add(mesh(sph(0.042, 10, 8), Basic(0x30251f), side * 0.104, 1.718, 0.373, false));
+      g.add(mesh(box(0.19, 0.61, 0.21), coat, side * 0.15, 0.405, -0.005));
+      g.add(mesh(box(0.21, 0.139, 0.31), L(0xe2ddca), side * 0.15, 0.075, 0.054));
+      const arm = new THREE.Group();
+      arm.position.set(side * 0.26, 1.23, 0.01);
+      arm.add(mesh(cyl(0.088, 0.076, 0.43, 10), coat, 0, -0.195, 0));
+      arm.add(mesh(sph(0.076, 10, 8), skin, 0, -0.43, 0.019));
+      arms.push(arm);
+      g.add(arm);
+    }
+    g.userData.arms = arms;
+    return g;
+  }
+
   let alarmFaceMaterial, alarmStripeMaterial;
   function alarmObstacle() {
     if (!alarmFaceMaterial) {
@@ -379,6 +390,16 @@ const Models = (() => {
   }
 
   function obstacle(type) {
+    const look = obstacleLooks[type];
+    const painted = look && obstaclePart(look[0]);
+    if (painted) {
+      const g = new THREE.Group();
+      const [, caption, bg, fg, width, y] = look;
+      const sign = label(caption, bg, fg, width);
+      sign.position.set(0, y, 0.22);
+      g.add(painted, sign);
+      return g;
+    }
     if (type === 'alarm') return alarmObstacle();
     const g = new THREE.Group();
     if (type === 'gang') {
@@ -402,7 +423,6 @@ const Models = (() => {
         fallback.add(mesh(sph(0.42, 16, 12), T(0xa06eb9), 0, 1.81, 0));
         fallback.add(mesh(sph(0.26, 14, 10), T(0xd8a657), 0.63, 1.28, 0.21));
         g.add(fallback);
-        g.userData.thanosFallback = fallback;
       }
       const lb = label('灭霸', '#eadcfa', '#462f68', 1.23);
       lb.position.set(0, 2.48, 0.12);
@@ -586,22 +606,26 @@ const Models = (() => {
     const g = new THREE.Group();
     const { longHalf, shortHalf, roofHeight, roofWidth, cabLength, rampLength, rampWidth } = truckGeometry;
     const half = long ? longHalf : shortHalf, len = half * 2;
-    // 底盘
-    g.add(mesh(box(1.7, 0.35, len - 0.2), T(0x2a2f38), 0, 0.72, 0));
-    // 货柜
-    g.add(mesh(box(1.9, 1.6, len), T(color), 0, 1.4, 0));
-    g.add(mesh(box(roofWidth, 0.12, len + 0.1), T(0xf0f0f0), 0, roofHeight - 0.06, 0));
-    // 车侧白色反光条
-    for (const s of [-1, 1]) g.add(mesh(box(0.02, 0.22, len - 0.5), T(0xfff6e3), s * 0.96, 1.0, 0, false));
-    // 车头（远端）
-    g.add(mesh(box(1.9, 1.8, cabLength), T(0x3a4a5a), 0, roofHeight - 0.9, -(half + cabLength / 2)));
-    g.add(mesh(box(1.7, 0.7, 0.1), Basic(0xbfe6ff), 0, 1.9, -(half + cabLength + 0.02)));
-    for (const s of [-1, 1]) g.add(mesh(sph(0.14, 10, 8), Basic(0xfff2b0), s * 0.7, 0.72, -(half + cabLength + 0.06), false));
-    // 车轮
-    const wheelZs = long ? [-half + 0.8, -half / 3, half / 3, half - 0.8] : [-2.6, -1.2, 1.6];
-    for (const zx of wheelZs) for (const s of [-1, 1]) {
-      const w = mesh(cyl(0.42, 0.42, 0.3, 14), T(0x22262e), s * 1.0, 0.42, zx);
-      w.rotation.z = Math.PI / 2; g.add(w);
+    const body = obstaclePart(long ? 'TruckLong' : 'TruckShort');
+    if (body) {
+      g.add(body);
+    } else {
+      // 底盘
+      g.add(mesh(box(1.7, 0.35, len - 0.2), T(0x2a2f38), 0, 0.72, 0));
+      // 货柜
+      g.add(mesh(box(1.9, 1.6, len), T(color), 0, 1.4, 0));
+      g.add(mesh(box(roofWidth, 0.12, len + 0.1), L(0x52646a), 0, roofHeight - 0.06, 0));
+      // 车侧白色反光条
+      for (const s of [-1, 1]) g.add(mesh(box(0.02, 0.22, len - 0.5), T(0xfff6e3), s * 0.96, 1.0, 0, false));
+      // 车头（远端）
+      g.add(mesh(box(1.9, 1.8, cabLength), T(0x3a4a5a), 0, roofHeight - 0.9, -(half + cabLength / 2)));
+      g.add(mesh(box(1.7, 0.7, 0.1), Basic(0xbfe6ff), 0, 1.9, -(half + cabLength + 0.02)));
+      for (const s of [-1, 1]) g.add(mesh(sph(0.14, 10, 8), Basic(0xfff2b0), s * 0.7, 0.72, -(half + cabLength + 0.06), false));
+      // 车轮
+      const wheelZs = long ? [-half + 0.8, -half / 3, half / 3, half - 0.8] : [-2.6, -1.2, 1.6];
+      for (const zx of wheelZs) for (const s of [-1, 1]) {
+        const w = mesh(cyl(0.42, 0.42, 0.3, 14), T(0x22262e), s * 1.0, 0.42, zx);
+        w.rotation.z = Math.PI / 2; g.add(w);
     }
     // 车尾（+z 近端）：双开门 + 把手 + 尾灯 + 保险杠
     g.add(mesh(box(1.78, 1.42, 0.06), T(0xe9e4da), 0, 1.38, half + 0.01, false));
@@ -611,19 +635,26 @@ const Models = (() => {
       g.add(mesh(box(0.06, 0.24, 0.05), T(0x6a6a72), s * 0.12, 1.3, half + 0.05, false));
     }
     g.add(mesh(box(1.82, 0.16, 0.12), T(0x2a2f38), 0, 0.5, half + 0.06, false));
+    }
     // 车顶标语（靠车头一侧，跑车顶时不挡视线）
     const lb = label(long ? '奶娃物流 · 加长' : '奶娃物流', '#fff6e3', '#3a2b20', 1.9);
     lb.position.set(0, 2.95, -(half - 0.8)); g.add(lb);
     g.userData.sign = lb;
     if (withRamp) {
-      // 斜坡：近端（+z，玩家先碰到）地面 -> 车顶近缘
-      const angle = Math.atan2(roofHeight, rampLength);
-      const rampLen = Math.hypot(rampLength, roofHeight);
-      const ramp = mesh(box(rampWidth, 0.12, rampLen), T(0xffd93f), 0,
-        roofHeight / 2 - 0.06 * Math.cos(angle), half + rampLength / 2 - 0.06 * Math.sin(angle));
-      ramp.rotation.x = angle;
-      for (const t of [-1.2, 0, 1.2]) ramp.add(mesh(box(rampWidth, 0.02, 0.3), T(0x2a2f38), 0, 0.07, t, false));
-      g.add(ramp);
+      const paintedRamp = obstaclePart('TruckRamp');
+      if (paintedRamp) {
+        paintedRamp.position.z = half;
+        g.add(paintedRamp);
+      } else {
+        // 斜坡：近端（+z，玩家先碰到）地面 -> 车顶近缘
+        const angle = Math.atan2(roofHeight, rampLength);
+        const rampLen = Math.hypot(rampLength, roofHeight);
+        const ramp = mesh(box(rampWidth, 0.12, rampLen), T(0xffd93f), 0,
+          roofHeight / 2 - 0.06 * Math.cos(angle), half + rampLength / 2 - 0.06 * Math.sin(angle));
+        ramp.rotation.x = angle;
+        for (const t of [-1.2, 0, 1.2]) ramp.add(mesh(box(rampWidth, 0.02, 0.3), T(0x2a2f38), 0, 0.07, t, false));
+        g.add(ramp);
+      }
       const tip = label('斜坡↑', '#fff6d9', '#a8861f', 1.2); tip.position.set(0, 1.0, half + 2.8); g.add(tip);
       g.userData.rampSign = tip;
     }
@@ -740,6 +771,16 @@ const Models = (() => {
     lb.position.set(0, 2.75, front + 0.2); g.add(lb);
     return g;
   }
+  function landmark(name, text) {
+    const group = new THREE.Group();
+    const asset = streetPart(name);
+    if (!asset) return group;
+    group.add(asset);
+    if (name === 'CampusClock') group.add(streetSign(text, 2.24, 0.36, 0, 2.43, 1.78));
+    if (name === 'MilkCourt') group.add(streetSign(text, 3.0, 0.39, 0, 2.56, 1.78));
+    if (name === 'ParkPond' || name === 'ParkWalk') group.userData.sceneryTail = 8;
+    return group;
+  }
   function tree(blossom = false) {
     const asset = streetPart(blossom ? 'BlossomTree' : 'PlaneTree');
     if (asset) {
@@ -756,6 +797,12 @@ const Models = (() => {
     });
     g.add(mesh(cyl(0.65, 0.72, 0.16, 12), L(0xd7c3a4), 0, 0.08, 0, false));
     return g;
+  }
+  function parkTree() {
+    const asset = streetPart('ParkPoplar');
+    if (!asset) return tree(false);
+    asset.userData.streetShadow = true;
+    return asset;
   }
   function flowerBed() {
     const asset = streetPart('FlowerPlanter');
@@ -831,11 +878,13 @@ const Models = (() => {
     g.add(mesh(sph(0.2, 12, 10), Basic(0xfff2b0), 0.7, 3.9, 0, false));
     return g;
   }
-  function gantry(text) {
+  function gantry(text, festive = false) {
     const g = new THREE.Group();
     const asset = streetPart('StreetGate');
     if (asset) {
       g.add(asset, streetSign(text, 3.50, 0.47, 0, 7.04, 0.154));
+      const bunting = festive && streetPart('MarketBunting');
+      if (bunting) g.add(bunting);
       return g;
     }
     // 门架抬到 7.4m：牌子从视野上方掠过，不再挡前方路面
@@ -851,25 +900,40 @@ const Models = (() => {
   function garden() { return streetPart('ParkGarden') || flowerBed(); }
   function hedge() { return mesh(box(0.5, 0.6, 8), L(0x5aa84f), 0, 0.3, 0, false); }
   function post() { return streetPart('StreetBollard') || mesh(box(0.12, 0.65, 0.12).translate(0, 0.325, 0), L(0x526465), 0, 0, 0, false); }
+  let cloudMap;
   function cloud() {
-    const g = new THREE.Group();
-    const m = L(0xd1d7d9);
-    for (const [x, y, z, radius, flatten] of [[0, 0, 0, 1.35, 0.64], [-0.45, 0.65, -0.05, 0.95, 0.8],
-      [1.1, 0.05, 0, 0.94, 0.61], [-1.32, -0.08, 0.17, 0.96, 0.54], [1.75, -0.22, -0.17, 0.62, 0.51]]) {
-      const puff = mesh(sph(radius, 14, 10), m, x, y, z, false);
-      puff.scale.y = flatten;
-      g.add(puff);
+    if (!cloudMap) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512; canvas.height = 128;
+      const c = canvas.getContext('2d');
+      const light = c.createLinearGradient(0, 16, 0, 112);
+      light.addColorStop(0, '#fff4d8');
+      light.addColorStop(.54, '#ffedcf');
+      light.addColorStop(1, '#d8d7cb');
+      c.fillStyle = light;
+      c.beginPath();
+      c.moveTo(17, 103);
+      c.bezierCurveTo(9, 91, 35, 84, 66, 82);
+      c.bezierCurveTo(95, 77, 101, 61, 128, 62);
+      c.bezierCurveTo(145, 61, 164, 52, 181, 41);
+      c.bezierCurveTo(198, 27, 225, 21, 243, 34);
+      c.bezierCurveTo(267, 1, 311, 7, 328, 38);
+      c.bezierCurveTo(361, 29, 386, 45, 394, 63);
+      c.bezierCurveTo(419, 56, 447, 69, 450, 85);
+      c.bezierCurveTo(483, 83, 502, 96, 493, 105);
+      c.bezierCurveTo(411, 113, 76, 119, 17, 103);
+      c.fill();
+      c.fillStyle = '#fff1d986';
+      c.beginPath();
+      c.moveTo(75, 90);
+      c.bezierCurveTo(158, 88, 177, 72, 229, 69);
+      c.bezierCurveTo(265, 45, 289, 62, 311, 64);
+      c.bezierCurveTo(355, 46, 376, 68, 416, 78);
+      c.bezierCurveTo(336, 82, 195, 99, 75, 90);
+      c.fill();
+      cloudMap = new THREE.CanvasTexture(canvas);
     }
-    return g;
-  }
-  function sun() {
-    const g = new THREE.Group();
-    g.add(mesh(sph(2.2, 20, 16), Basic(0xffd93f), 0, 0, 0, false));
-    const gl = Basic(0x222222);
-    g.add(mesh(box(1.5, 0.7, 0.3), gl, -0.85, 0.3, -2.0, false));
-    g.add(mesh(box(1.5, 0.7, 0.3), gl, 0.85, 0.3, -2.0, false));
-    g.add(mesh(box(0.6, 0.2, 0.3), gl, 0, 0.4, -2.0, false));
-    return g;
+    return new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudMap, depthWrite: false, fog: false }));
   }
   function sidewalkTexture() {
     const cv = document.createElement('canvas');
@@ -898,46 +962,91 @@ const Models = (() => {
   }
   function lawnTexture() {
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#82956c';
-    ctx.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 1900; i++) {
-      ctx.fillStyle = i % 2 ? 'rgba(185,189,132,0.24)' : 'rgba(69,93,65,0.22)';
-      ctx.fillRect(Math.random() * 128, Math.random() * 128, 1 + i % 4, 1 + i % 2);
+    canvas.width = canvas.height = 256;
+    const c = canvas.getContext('2d');
+    c.fillStyle = '#667751'; c.fillRect(0, 0, 256, 256);
+    for (const [x, y, radius, tint] of [[24, 58, 37, '#829461'], [124, 115, 39, '#5b754f'],
+      [200, 55, 43, '#778b55'], [174, 210, 42, '#829462'], [42, 186, 36, '#576e4e']]) {
+      const patch = c.createRadialGradient(x, y, 2, x, y, radius);
+      patch.addColorStop(0, tint); patch.addColorStop(1, tint + '00');
+      c.fillStyle = patch;
+      c.fillRect(x - radius, y - radius, 2 * radius, 2 * radius);
+    }
+    for (let i = 0; i < 2300; i++) {
+      c.fillStyle = i % 2 ? '#adc18d38' : '#344d3640';
+      c.fillRect(Math.random() * 256, Math.random() * 256, 1 + i % 3, 1 + i % 2);
     }
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.anisotropy = 4;
     return tex;
   }
+
   function skyDome() {
-    const cv = document.createElement('canvas');
-    cv.width = 4; cv.height = 256;
-    const c = cv.getContext('2d');
-    const gr = c.createLinearGradient(0, 0, 0, 256);
-    gr.addColorStop(0, '#76adc7');
-    gr.addColorStop(0.36, '#a6c8d5');
-    gr.addColorStop(0.52, '#e6d9c8');
-    gr.addColorStop(0.71, '#f1e4cf');
-    gr.addColorStop(1, '#f1e4cf');
-    c.fillStyle = gr; c.fillRect(0, 0, 4, 256);
-    const tex = new THREE.CanvasTexture(cv);
-    return new THREE.Mesh(new THREE.SphereGeometry(300, 24, 16), new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false }));
+    const material = new THREE.ShaderMaterial({
+      uniforms: { topColor: { value: new THREE.Color() }, horizonColor: { value: new THREE.Color() } },
+      side: THREE.BackSide,
+      depthWrite: false,
+      vertexShader: `
+        varying vec3 vDirection;
+        void main() {
+          vDirection = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 topColor;
+        uniform vec3 horizonColor;
+        varying vec3 vDirection;
+        void main() {
+          vec3 ray = normalize(vDirection);
+          float height = smoothstep(-0.055, 0.43, ray.y);
+          vec3 base = mix(horizonColor, topColor, height);
+          float towardSun = max(0.0, dot(ray, normalize(vec3(-0.36, 0.23, -1.0))));
+          float halo = pow(towardSun, 42.0) * 0.40;
+          float disk = smoothstep(0.99954, 0.99967, towardSun);
+          vec3 lit = mix(base, vec3(1.0, 0.90, 0.73), halo);
+          gl_FragColor = vec4(mix(lit, vec3(1.0, 0.96, 0.84), disk), 1.0);
+        }`,
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 30, 20), material);
+    sky.renderOrder = -10;
+    return sky;
   }
-  function city() {
-    const g = new THREE.Group();
-    const colors = [0xa394c7, 0x8faac5, 0xc0a4c5, 0x9dbcb7];
-    for (let i = 0; i < 24; i++) {
-      const h = 7 + Math.random() * 20, w = 5 + Math.random() * 2;
-      const x = -92 + i * 8;
-      g.add(mesh(box(w, h, 6), L(colors[i % colors.length]), x, h / 2, Math.sin(i * 2.1) * 5, false));
-      g.add(mesh(box(w * 0.72, 1.1, 6.2), L(0x776d99), x, h + 0.55, Math.sin(i * 2.1) * 5, false));
-      if (i % 3 === 0) g.add(mesh(cyl(0.04, 0.04, 3.5, 6), L(0x776d99), x, h + 2.6, 0, false));
-      for (let r = 0; r < Math.floor(h / 3); r++)
-        g.add(mesh(box(w * 0.65, 0.25, 0.04), Basic(0xd9d5e5), x, 2 + r * 2.8, 3.05 + Math.sin(i * 2.1) * 5, false));
+
+  function hills(radius, height, phase, hazeColor) {
+    const steps = 160;
+    const points = [], indices = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = i / steps * Math.PI * 2;
+      const x = Math.sin(a) * radius, z = -Math.cos(a) * radius;
+      const valley = 0.42 + 0.58 * Math.abs(Math.sin(a * 1.5));
+      const ridge = 0.58 + 0.22 * Math.sin(a * 7 + phase) + 0.14 * Math.sin(a * 13 + 1.2 + phase);
+      points.push(x, -3, z, x, 4 + height * ridge * valley, z);
+      if (i < steps) indices.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
     }
-    return g;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+    geometry.setIndex(indices);
+    const material = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: { ridgeColor: { value: new THREE.Color() }, hazeColor: { value: hazeColor },
+        hazeHeight: { value: height * 0.39 } },
+      vertexShader: `
+        varying float vHeight;
+        void main() {
+          vHeight = position.y;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 ridgeColor;
+        uniform vec3 hazeColor;
+        uniform float hazeHeight;
+        varying float vHeight;
+        void main() {
+          gl_FragColor = vec4(mix(hazeColor, ridgeColor, smoothstep(0.0, hazeHeight, vHeight)), 1.0);
+        }`,
+    });
+    return mesh(geometry, material, 0, 0, 0, false);
   }
 
   /* 梗道具：篮球（鸡你太美） */
@@ -954,8 +1063,8 @@ const Models = (() => {
     return g;
   }
 
-  return { naiwa, obstacle, truck, truckGeometry, markTruckJump, memeBall, coin, power, building, tree,
+  return { naiwa, doubaoFallback, obstacle, truck, truckGeometry, markTruckJump, memeBall, coin, power, building, tree,
     flowerBed, bench, busStop, stall, crosswalk, lamp, gantry, fountain, garden, hedge, post, trackTexture, lawnTexture,
-    sidewalkTexture, cloud, sun, skyDome, city, label, iconSprite, batchScenery, characterShadows,
-    installStreetKit, setStreetDetail, installThanos, replaceThanosFallback, T, L, P, Basic };
+    sidewalkTexture, cloud, skyDome, hills, landmark, parkTree, label, batchScenery, characterShadows,
+    installStreetKit, installObstacleKit, setStreetDetail, installThanos, T, L, P, Basic };
 })();

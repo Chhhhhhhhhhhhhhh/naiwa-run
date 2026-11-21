@@ -17,15 +17,22 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 
 const LANE_X = [-2.4, 0, 2.4];
 const GRAVITY = 26, JUMP_V = 8.4;
+const DISTRICT_LENGTH = 220;
 const DISTRICTS = [
   { name: '奶娃大学城', buildings: [['CampusLibrary', '图书馆', 0xc48a70],
-    ['AcademicHall', '早八教学楼', 0xd7c7ab], ['Dormitory', '青春宿舍', 0xd39c79]] },
+    ['AcademicHall', '早八教学楼', 0xd7c7ab], ['Dormitory', '青春宿舍', 0xd39c79]],
+    colors: { sky: 0x77abb6, horizon: 0xf5dabb, distance: 0xd9ceb5,
+      farHill: 0xc1cbba, nearHill: 0xa2b6a0, grass: 0xe3e5dc, sun: 0xffe1ba } },
   { name: '奶昔商业街', buildings: [['TeaCorner', '奶茶研究所', 0xd4a07a],
-    ['MilkMarket', '666超市', 0xaac1ad], ['TeaCorner', '快乐星球', 0xd4a07a]] },
+    ['MilkMarket', '666超市', 0xaac1ad], ['TeaCorner', '快乐星球', 0xd4a07a]],
+    colors: { sky: 0x8d9fb8, horizon: 0xf4c7a7, distance: 0xe0c7b1,
+      farHill: 0xc5b3b0, nearHill: 0xabaa9c, grass: 0xece1d2, sun: 0xffd3a7 } },
   { name: '躺平公园', buildings: [['ParkPavilion', '摸鱼亭', 0x648379],
-    ['ParkPavilion', '慢生活馆', 0x648379]] },
+    ['ParkPavilion', '慢生活馆', 0x648379]],
+    colors: { sky: 0x7aafb8, horizon: 0xe8e5ca, distance: 0xc7d4bf,
+      farHill: 0xadc7bd, nearHill: 0x8ba99b, grass: 0xe9f1d6, sun: 0xffead2 } },
 ];
-const districtAt = pos => DISTRICTS[Math.floor(Math.max(0, pos) / 220) % DISTRICTS.length];
+const districtAt = pos => DISTRICTS[Math.floor(Math.max(0, pos) / DISTRICT_LENGTH) % DISTRICTS.length];
 const MENU_TIPS = [
   '温馨提示：跑不过 DDL 是正常的',
   '温馨提示：奶娃饿了就要喝奶',
@@ -54,19 +61,6 @@ const MENU_TIPS = [
   '温馨提示：千百次练习只为这一刻——先跑起来',
   '温馨提示：情绪价值 +1 奶币',
 ];
-const MENU_TAGLINES = [
-  '地铁跑酷？不，是奶跑酷！',
-  '如何呢，又能怎？先跑为敬！',
-  '牌没有问题，跑就完了！',
-  '助我破鼎，从第一米开始！',
-  '敬自己一杯，奶娃先干为敬！',
-  '过程基础，结果不基础！',
-  '我去，不早说，开跑！',
-  '真没空陪你闹了，开冲！',
-  '活人感拉满的奶娃，出发！',
-  '来吧，让我看看你的走位！',
-];
-const START_LABELS = ['开跑！', '冲鸭！', '助我破鼎！', '整活开始！', '开冲！', '先跑为敬！'];
 const PAUSE_TITLES = ['摸鱼中…', '战术暂停', '中场休息', '装死中…', '赛博挂机', '先喘口气', '奶娃系鞋带', '暂停即胜利'];
 const PAUSE_QUIPS = [
   '如何呢，又能怎？先歇一下。',
@@ -125,7 +119,10 @@ const AIR_FLIP_DUR = 0.62; // 一次跳跃的滞空时间，正好转满一圈
 const SLIDE_DURATION = 0.75;
 const CHASE_DURATION = 4.8;
 const CHASE_TRAIL_METRES = 12;
-const STREET_DETAIL_DISTANCE = 52;
+const CAPTURE_LENGTH = 1.4;
+const CAPTURE_REACH = 0.38;
+const CAPTURE_CONTACT = 0.82;
+const STREET_DETAIL_DISTANCE = handheld ? 40 : 52;
 const chaseTrail = [{ distance: 0, x: 0, y: 0 }];
 
 const G = {
@@ -135,36 +132,44 @@ const G = {
   objects: [], buildings: [], nextSpawn: FIRST_ROAD_SECTION, nextConvoy: FIRST_ROAD_SECTION,
   nextShieldRun: FIRST_ROAD_SECTION, openLane: 0, lastStreetRow: null, roofHint: false,
   truckDeck: [], lastTruckLayout: null,
-  nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95,
+  nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95, nextLandmark: 30,
   particles: [], flyingObstacles: [], shake: 0, deadTimer: 0, phase: 0, airTime: 0, support: 0, surface: null,
   grounded: true, jumping: false, jumpFrom: 0, speedTier: 0, chaseTime: 0, chaseActive: false,
+  motion: '', motionUntil: 0, capture: null, roofHintUntil: 0,
   best: +(localStorage.getItem('naiwa-best') || 0),
 };
 
 /* ---------- 场景搭建 ---------- */
-scene.add(Models.skyDome());
-const sun = Models.sun(); sun.position.set(46, 52, -170); scene.add(sun);
-const city = Models.batchScenery(Models.city()); city.position.set(0, 0, -175); scene.add(city);
-const clouds = [];
-for (let i = 0; i < 8; i++) {
-  const c = Models.batchScenery(Models.cloud());
-  c.position.set(rand(-60, 60), rand(20, 40), rand(-140, -60));
-  c.scale.setScalar(rand(1.5, 3));
-  scene.add(c); clouds.push(c);
-}
-const hemi = new THREE.HemisphereLight(0xdaeeff, 0xa29d85, 0.87); scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffedd5, 0.86);
-dir.position.set(18, 36, 14);
+const sky = Models.skyDome();
+const farHill = Models.hills(234, 56, 0.7, scene.fog.color);
+const nearHill = Models.hills(154, 26, 2.8, scene.fog.color);
+scene.add(sky, farHill, nearHill);
+const clouds = [
+  [-63, 29, -142, 44, 10], [50, 36, -137, 41, 10], [6, 15, -184, 31, 5.5],
+  [-33, 19, -112, 23, 6.3], [65, 24, -180, 47, 8], [108, 26, -63, 39, 11],
+].map(([x, y, z, width, height]) => {
+  const cloud = Models.cloud();
+  cloud.position.set(x, y, z);
+  cloud.scale.set(width, height, 1);
+  cloud.material.opacity = 0.84;
+  scene.add(cloud);
+  return cloud;
+});
+const hemi = new THREE.HemisphereLight(0xd9edf2, 0xaaa58c, 0.78); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffe1ba, 0.78);
+// 将阴影范围对准角色和近处赛道，同时保持太阳的照射方向。
+const shadowTargetZ = -8;
+dir.target.position.z = shadowTargetZ;
+dir.position.set(-25, 32, shadowTargetZ - 7);
 dir.castShadow = true;
 dir.shadow.mapSize.set(512, 512);
-dir.shadow.camera.left = -15; dir.shadow.camera.right = 15;
+dir.shadow.camera.left = -22; dir.shadow.camera.right = 18;
 dir.shadow.camera.top = 20; dir.shadow.camera.bottom = -26;
 dir.shadow.camera.near = 1; dir.shadow.camera.far = 120;
 dir.shadow.bias = -0.0005;
-dir.target.position.set(0, 0, -16);
 scene.add(dir, dir.target);
-const fill = new THREE.DirectionalLight(0xd3e3f2, 0.38);
-fill.position.set(-6, 10, -24);
+const fill = new THREE.DirectionalLight(0xd7eaf1, 0.27);
+fill.position.set(12, 10, 16);
 scene.add(fill);
 
 const lawnTex = Models.lawnTexture();
@@ -180,14 +185,36 @@ scene.add(track);
 const sidewalkTex = Models.sidewalkTexture();
 sidewalkTex.repeat.set(1.5, 90);
 for (const sx of [-3.8, 3.8]) {
-  const curb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 400), Models.L(0xd2c5b1));
+  const curb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 400), Models.L(0xa79e8d));
   curb.position.set(sx, 0.08, -160); curb.receiveShadow = true; scene.add(curb);
   const side = Math.sign(sx);
   const sidewalk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.12, 400), new THREE.MeshLambertMaterial({ map: sidewalkTex }));
   sidewalk.position.set(side * 5.2, 0.03, -160); sidewalk.receiveShadow = true; scene.add(sidewalk);
-  const outerCurb = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.15, 400), Models.L(0xa79b85));
+  const outerCurb = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.15, 400), Models.L(0x8f8b76));
   outerCurb.position.set(side * 6.5, 0.05, -160); scene.add(outerCurb);
 }
+const skyColors = sky.material.uniforms;
+const districtColors = {
+  sky: skyColors.topColor.value, horizon: skyColors.horizonColor.value, distance: scene.fog.color,
+  farHill: farHill.material.uniforms.ridgeColor.value, nearHill: nearHill.material.uniforms.ridgeColor.value,
+  grass: ground.material.color, sun: dir.color,
+};
+const colorTargets = Object.entries(districtColors);
+const blendColor = new THREE.Color();
+let paintedDistrict = null, paintedBlend = -1;
+function updateDistrictArt() {
+  const here = districtAt(G.distance);
+  const progress = G.distance % DISTRICT_LENGTH;
+  const blend = THREE.MathUtils.smoothstep(progress, DISTRICT_LENGTH - 34, DISTRICT_LENGTH);
+  if (here === paintedDistrict && blend === paintedBlend) return;
+  paintedDistrict = here;
+  paintedBlend = blend;
+  const next = districtAt(G.distance + DISTRICT_LENGTH);
+  for (const [name, target] of colorTargets) {
+    target.setHex(here.colors[name]).lerp(blendColor.setHex(next.colors[name]), blend);
+  }
+}
+updateDistrictArt();
 const postMatrix = new THREE.Matrix4();
 function addStreetPosts() {
   const { geometry, material } = Models.post();
@@ -201,6 +228,8 @@ let streetKitReady = false;
 
 const player = Models.naiwa(); scene.add(player);
 const chaser = new THREE.Group();
+const chaserBackup = Models.doubaoFallback();
+chaser.add(chaserBackup);
 chaser.visible = false;
 scene.add(chaser);
 const actorShadows = Models.characterShadows();
@@ -230,18 +259,20 @@ function riggedCharacter(gltf, height) {
   });
   const mixer = new THREE.AnimationMixer(model);
   const actions = new Map(gltf.animations.map(clip => [clip.name, mixer.clipAction(clip)]));
-  for (const name of ['Jump', 'Slide']) {
-    const action = actions.get(name);
-    if (action) { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
+  for (const [name, action] of actions) {
+    if (name === 'Idle' || name === 'Run') continue;
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
   }
   let current = null;
   return {
     model,
     animate(name, dt, speed = 1) {
-      const action = actions.get(name);
+      const action = actions.get(name) ?? actions.get('Idle');
+      if (!action) return;
       if (current !== action) {
         action.reset().setEffectiveWeight(1).play();
-        if (current) action.crossFadeFrom(current, name === 'Jump' || name === 'Slide' ? 0.06 : 0.14, false);
+        if (current) action.crossFadeFrom(current, name === 'Idle' || name === 'Run' ? 0.12 : 0.075, false);
         current = action;
       }
       action.timeScale = speed;
@@ -251,112 +282,138 @@ function riggedCharacter(gltf, height) {
 }
 
 const bootBackdrop = document.getElementById('boot-backdrop');
-let bootBackdropDone = false;
-function revealBootBackdrop() {
-  if (bootBackdropDone) return;
-  bootBackdropDone = true;
-  bootBackdrop?.classList.add('done');
+const loadingPanel = document.querySelector('.loading-panel');
+const loadingStage = document.getElementById('loading-stage');
+const loadingPercent = document.getElementById('loading-percent');
+const loadingFill = document.getElementById('loading-fill');
+const loadingTrack = document.querySelector('.loading-track');
+const startButton = document.getElementById('btn-start');
+const startLabel = document.getElementById('start-label');
+const home = document.getElementById('menu');
+let bootReady = false, startRequested = false;
+
+function showLoading(message, progress) {
+  if (loadingStage.textContent !== message) loadingStage.textContent = message;
+  loadingPercent.textContent = progress + '%';
+  loadingFill.style.width = progress + '%';
+  loadingTrack.setAttribute('aria-valuenow', progress);
 }
 
 function loadGameArt() {
   const loader = new THREE.GLTFLoader();
-  const artStages = [
-    { label: '奶娃穿鞋中…', progress: 0, failed: false },
-    { label: '豆包老师热身中…', progress: 0, failed: false },
-    { label: '赛道铺设中…', progress: 0, failed: false },
-    { label: '灭霸进场中…', progress: 0, failed: false },
+  const assets = [
+    ['assets/naiwa-runner.glb', '奶娃正在热身', gltf => {
+      runnerRig = riggedCharacter(gltf, 1.9);
+      const skin = runnerRig.model;
+      skin.rotation.y = Math.PI; // GLB 面朝 +Z，游戏向 -Z 前进
+      skin.position.y -= player.userData.spin.position.y;
+      skin.visible = false;
+      player.userData.spin.add(skin);
+    }],
+    ['assets/doubao-teacher.glb', '豆包老师准备出场', gltf => {
+      chaserRig = riggedCharacter(gltf, 2.15);
+      chaserBackup.visible = false;
+      chaser.add(chaserRig.model);
+    }],
+    ['assets/street-kit.glb', '正在铺设街景', gltf => {
+      Models.installStreetKit(gltf.scene);
+      streetKitReady = true;
+      for (const entry of G.buildings) {
+        if (!entry.fallbackFactory) continue;
+        const replacement = entry.fallbackFactory();
+        replacement.position.copy(entry.mesh.position);
+        replacement.rotation.copy(entry.mesh.rotation);
+        replacement.scale.copy(entry.mesh.scale);
+        if (entry.key) replacement.userData.poolKey = entry.key;
+        Models.setStreetDetail(replacement, entry.far);
+        disposeObject(entry.mesh);
+        scene.add(replacement);
+        entry.mesh = replacement;
+        entry.fallbackFactory = null;
+      }
+      disposeObject(posts);
+      posts.dispose();
+      posts = addStreetPosts();
+      postOffset = NaN;
+      updatePosts();
+    }],
+    ['assets/obstacle-kit.glb', '正在布置障碍物', gltf => Models.installObstacleKit(gltf.scene)],
+    ['assets/thanos-obstacle.glb', '灭霸准备出场', gltf => Models.installThanos(gltf.scene)],
   ];
-  const elStage = document.getElementById('loading-stage');
-  const elPercent = document.getElementById('loading-percent');
-  const elFill = document.getElementById('loading-fill');
-  const elTrack = document.querySelector('.loading-track');
-  const panel = elStage.closest('.loading-panel');
-  let loadingHideTimer = null;
-  let prewarmed = false;
-  const refreshLoading = () => {
-    const pending = artStages.find(stage => stage.progress < 1);
-    const percent = Math.round(artStages.reduce((sum, stage) => sum + stage.progress, 0) / artStages.length * 100);
-    elStage.textContent = pending ? pending.label
-      : artStages.some(stage => stage.failed) ? '素材走神了，备用造型已就位'
-      : '奶已温好，开跑！';
-    elPercent.textContent = `${percent}%`;
-    elFill.style.width = `${percent}%`;
-    elTrack.setAttribute('aria-valuenow', percent);
-    panel.classList.toggle('ready', !pending && !artStages.some(stage => stage.failed));
-    if (!pending && loadingHideTimer === null) {
-      revealBootBackdrop();
-      loadingHideTimer = setTimeout(() => panel.classList.add('dismissed'), 2000);
-    }
-    if (!pending && !prewarmed) {
-      prewarmed = true;
-      // 放在“奶已温好”的停留时间里预热，避免开跑第一帧集中造模型。
-      setTimeout(prewarmPools, 60);
-    }
+  const stages = assets.map(([, label]) => ({ label, progress: 0, done: false }));
+  let pending = stages.length, failures = 0;
+  const updateProgress = () => {
+    const next = stages.find(stage => !stage.done);
+    const progress = stages.reduce((sum, stage) => sum + stage.progress, 0) / stages.length;
+    showLoading(next?.label ?? '正在预热赛道', Math.round(progress * 92));
   };
-  const markArt = (index, progress = 1, failed = false) => {
-    const stage = artStages[index];
-    stage.progress = Math.max(stage.progress, progress >= 1 ? 1 : Math.max(0, progress));
-    if (failed) stage.failed = true;
-    refreshLoading();
-  };
-  const artProgress = index => event => {
-    if (event?.lengthComputable) markArt(index, event.loaded / event.total);
-  };
-  refreshLoading();
+  updateProgress();
 
-  loader.load('assets/naiwa-runner.glb', gltf => {
-    markArt(0);
-    runnerRig = riggedCharacter(gltf, 1.9);
-    const skin = runnerRig.model;
-    skin.rotation.y = Math.PI; // GLB 面朝 +Z，游戏向 -Z 前进
-    skin.position.y -= player.userData.spin.position.y;
-    skin.visible = false;
-    player.userData.spin.add(skin);
-  }, artProgress(0), err => { markArt(0, 1, true); console.warn('奶娃模型无法载入，使用备用模型', err); });
-  loader.load('assets/doubao-teacher.glb', gltf => {
-    markArt(1);
-    chaserRig = riggedCharacter(gltf, 2.15);
-    chaser.add(chaserRig.model);
-  }, artProgress(1), err => { markArt(1, 1, true); console.warn('豆包老师模型无法载入', err); });
-  loader.load('assets/street-kit.glb', gltf => {
-    markArt(2);
-    Models.installStreetKit(gltf.scene);
-    streetKitReady = true;
-    for (const entry of G.buildings) {
-      if (!entry.fallbackFactory) continue;
-      const replacement = entry.fallbackFactory();
-      replacement.position.copy(entry.mesh.position);
-      replacement.rotation.copy(entry.mesh.rotation);
-      replacement.scale.copy(entry.mesh.scale);
-      if (entry.key) replacement.userData.poolKey = entry.key;
-      Models.setStreetDetail(replacement, entry.far);
-      disposeObject(entry.mesh);
-      scene.add(replacement);
-      entry.mesh = replacement;
-      entry.fallbackFactory = null;
-    }
-    disposeObject(posts);
-    posts.dispose();
-    posts = addStreetPosts();
-    postOffset = NaN;
-    updatePosts();
-    needsRender = true;
-  }, artProgress(2), err => { markArt(2, 1, true); console.warn('街景模型无法载入，使用备用街景', err); });
-  loader.load('assets/thanos-obstacle.glb', gltf => {
-    markArt(3);
-    Models.installThanos(gltf.scene);
-    const instances = (pool['obs:thanos'] ?? []).slice();
-    for (const o of G.objects) if (o.type === 'thanos') instances.push(o.mesh);
-    for (const { obstacle } of G.flyingObstacles) if (obstacle.type === 'thanos') instances.push(obstacle.mesh);
-    for (const instance of instances) {
-      const fallback = Models.replaceThanosFallback(instance);
-      if (fallback) disposeObject(fallback);
-    }
-    needsRender = true;
-  }, artProgress(3), err => { markArt(3, 1, true); console.warn('灭霸模型无法载入，使用备用模型', err); });
+  assets.forEach(([url, , install], index) => {
+    const stage = stages[index];
+    const complete = (gltf, error) => {
+      if (stage.done) return;
+      clearTimeout(timeout);
+      if (gltf) {
+        try { install(gltf); }
+        catch (installError) { error = installError; }
+      }
+      if (error) {
+        failures++;
+        console.warn('资源加载失败，已启用备用模型', url, error);
+      }
+      stage.done = true;
+      stage.progress = 1;
+      pending--;
+      needsRender = true;
+      updateProgress();
+      if (pending === 0) prewarmPools(frac => showLoading('正在预热赛道', 92 + Math.round(frac * 7)), () => {
+        requestAnimationFrame(() => {
+          showLoading(failures ? '可以开跑，部分素材使用备用造型' : '赛道准备好了', 100);
+          bootBackdrop.classList.add('done');
+          loadingPanel.classList.toggle('ready', failures === 0);
+          bootReady = true;
+          startButton.disabled = false;
+          startButton.removeAttribute('aria-busy');
+          startLabel.textContent = '开跑';
+          if (startRequested) startGame();
+        });
+      });
+    };
+    const timeout = setTimeout(() => complete(null, new Error('加载超时')), 9500);
+    loader.load(url, gltf => complete(gltf), event => {
+      if (stage.done || !event.lengthComputable || event.total <= 0) return;
+      stage.progress = Math.max(stage.progress, Math.min(0.94, event.loaded / event.total));
+      updateProgress();
+    }, error => complete(null, error));
+  });
 }
 
-function menuCharacterX() { return camera.aspect < 0.85 ? 1.7 : 3.05; }
+function animateChaser(action, dt, speed = 1) {
+  if (chaserRig) {
+    chaserRig.animate(action, dt, speed);
+    return;
+  }
+  for (const [i, arm] of chaserBackup.userData.arms.entries()) {
+    const swing = Math.sin(G.phase + i * Math.PI);
+    arm.rotation.x = action === 'Grab' ? -1.38 : action === 'Run' ? swing * 0.55 : 0;
+  }
+}
+
+function updateCaptureChaser(dt) {
+  const { from, side } = G.capture;
+  const elapsed = CAPTURE_LENGTH - G.deadTimer;
+  const approach = THREE.MathUtils.smoothstep(elapsed, 0, 0.66);
+  const x = THREE.MathUtils.lerp(from.x, G.px - side * 0.29, approach);
+  const z = THREE.MathUtils.lerp(from.z, 0.78, approach);
+  const surface = getTruckSurface(G.distance - z, x);
+  const y = THREE.MathUtils.lerp(from.y, surface?.height ?? 0, approach);
+  chaser.position.set(x, Math.max(y, surface?.height ?? 0), z);
+  chaser.rotation.set(0, Math.atan2(G.px - x, -z), 0);
+  chaser.visible = true;
+  animateChaser(elapsed >= CAPTURE_REACH ? 'Grab' : 'Run', dt, 1.18);
+  return surface;
+}
 
 function startChase() {
   G.chaseActive = true;
@@ -385,11 +442,13 @@ function chasePosition(distance) {
   };
 }
 function updateChaser(dt) {
+  if (G.capture) return updateCaptureChaser(dt);
   if (G.state === 'menu') {
-    chaser.visible = Boolean(chaserRig);
-    chaser.position.set(menuCharacterX(), 0, 0.75);
-    chaser.rotation.set(0, -0.32, 0);
-    chaserRig?.animate('Idle', dt);
+    chaser.visible = true;
+    const portrait = camera.aspect < 0.95;
+    chaser.position.set(portrait ? 0.98 : 3.36, 0, portrait ? 0.04 : -0.72);
+    chaser.rotation.set(0, -0.34, 0);
+    animateChaser(G.t % 10 >= 5.0 && G.t % 10 < 6.5 ? 'Greeting' : 'Idle', dt);
     return;
   }
   if (G.state === 'play') trackRunner();
@@ -408,8 +467,8 @@ function updateChaser(dt) {
   const turn = THREE.MathUtils.clamp(heading, -0.65, 0.65);
   chaser.position.set(x, Math.max(y, surface?.height ?? 0), gap);
   chaser.rotation.set(0, Math.PI - turn, -turn * 0.16);
-  chaser.visible = Boolean(chaserRig);
-  chaserRig?.animate('Run', dt, Math.min(1.7, G.speed / 13));
+  chaser.visible = true;
+  animateChaser(y - (surface?.height ?? 0) > 0.17 ? 'Jump' : 'Run', dt, Math.min(1.7, G.speed / 13));
   return surface;
 }
 
@@ -443,23 +502,34 @@ function release(o) {
 }
 // 开局前把赛道会用到的模型先造好并塞进对象池，跑图过程中不再临时创建几何/材质。
 const PREWARM_OBSTACLES = ['alarm', 'gang', 'bing', 'thanos', 'emo', 'phone'];
-function prewarmPools() {
-  const fill = (key, count, make) => {
+function prewarmPools(progress, ready) {
+  const jobs = [];
+  const schedule = (key, count, make) => {
     const list = pool[key] || (pool[key] = []);
-    while (list.length < count) {
+    for (let i = list.length; i < count; i++) jobs.push(() => {
       const mesh = make();
       mesh.visible = false;
       list.push(mesh);
-    }
+    });
   };
-  fill('coin:coin', 40, () => Models.coin());
-  for (const type of ['shield', 'sprint', 'magnet']) fill('power:' + type, 3, () => Models.power(type));
-  for (const type of PREWARM_OBSTACLES) fill('obs:' + type, 3, () => Models.obstacle(type));
+  schedule('coin:coin', 40, Models.coin);
+  for (const type of ['shield', 'sprint', 'magnet']) schedule('power:' + type, 3, () => Models.power(type));
+  for (const type of PREWARM_OBSTACLES) schedule('obs:' + type, 3, () => Models.obstacle(type));
   for (const type of Object.keys(TRUCK_TYPES)) {
     const T = TRUCK_TYPES[type];
-    fill('obs:' + type, 2, () => Models.truck(T.ramp, pick(TRUCK_COLORS), T.long));
+    schedule('obs:' + type, 2, () => Models.truck(T.ramp, pick(TRUCK_COLORS), T.long));
   }
-  fill('meme:jntm', 1, () => Models.memeBall());
+  schedule('meme:jntm', 1, Models.memeBall);
+  let next = 0;
+  function warmFrame() {
+    const deadline = performance.now() + 4;
+    const end = Math.min(jobs.length, next + 9);
+    while (next < end && performance.now() < deadline) jobs[next++]();
+    progress(jobs.length ? next / jobs.length : 1);
+    if (next < jobs.length) requestAnimationFrame(warmFrame);
+    else ready();
+  }
+  requestAnimationFrame(warmFrame);
 }
 
 /* ---------- 赛道生成 ---------- */
@@ -483,13 +553,13 @@ function addLaneChangeCoins(fromX, toX, pos) {
   addCoin((fromX + toX) / 2, pos - COIN_SPACING / 2, 0);
   addCoin(toX, pos, 0);
 }
-function addJumpCoins(fromX, takeoff, fromY, toX, landing, toY, fromTruck = null, toTruck = null) {
-  const count = Math.max(2, Math.round((landing - takeoff) / COIN_SPACING));
+function addLowObstacleCoins(laneX, center) {
+  const distance = runningSpeed(center) * JUMP_TIME;
+  const count = Math.max(2, Math.round(distance / COIN_SPACING));
   for (let i = 0; i <= count; i++) {
     const t = i / count;
     const arc = 4 * t * (1 - t) * JUMP_V * JUMP_V / (2 * GRAVITY);
-    addCoin(THREE.MathUtils.lerp(fromX, toX, t), THREE.MathUtils.lerp(takeoff, landing, t),
-      THREE.MathUtils.lerp(fromY, toY, t) + arc, t < 0.5 ? fromTruck : toTruck);
+    addCoin(laneX, center + (t - 0.5) * distance, arc);
   }
 }
 function addPower(laneX, pos, type = pick(['shield', 'sprint', 'magnet'])) {
@@ -517,7 +587,7 @@ function getTruckSurface(distance, x) {
 }
 function runningSpeed(distance) {
   const lateDistance = Math.max(0, distance - 400);
-  return Math.min(13 + distance * 0.024 + lateDistance * 0.006, 40);
+  return Math.min(13 + distance * 0.024 + lateDistance * 0.012, 44);
 }
 function placeTruck(type, laneX, entrance) {
   const { half, ramp } = TRUCK_TYPES[type];
@@ -582,7 +652,6 @@ function spawnConvoy(pos) {
   for (const [type, lane] of route.slice(1)) {
     const link = extendConvoy(truck, type, lanes[lane], opening);
     roofCoins(truck, arrival, link.takeoff);
-    addJumpCoins(truck.wx, link.takeoff, TRUCK.roofHeight, link.truck.wx, link.arrival, TRUCK.roofHeight, truck, link.truck);
     truck = link.truck;
     arrival = link.arrival;
   }
@@ -593,7 +662,8 @@ function spawnConvoy(pos) {
     if (TRUCK_TYPES[parallel].ramp) roofCoins(staggered);
     end = Math.max(end, truckEnd(staggered));
   }
-  addCoinRow(G.openLane, pos, Math.max(2, Math.floor((end - pos) / COIN_SPACING) + 1));
+  const coinStart = previousLane === G.openLane ? pos : pos + COIN_SPACING;
+  addCoinRow(G.openLane, coinStart, Math.max(1, Math.floor((end - coinStart) / COIN_SPACING) + 1));
   G.nextConvoy = end + Math.max(43, runningSpeed(end) * rand(2.45, 5.15));
   return end;
 }
@@ -601,7 +671,7 @@ function spawnShieldRun(pos) {
   const lane = G.openLane === 0 ? pick([LANE_X[0], LANE_X[2]]) : 0;
   addPower(lane, pos, 'shield');
   const truck = placeTruck('truck', lane, pos + 10);
-  addCoinRow(G.openLane, pos + 1.2, 5);
+  addCoinRow(G.openLane, pos + 1.2, 4);
   const end = truckEnd(truck);
   G.nextShieldRun = end + Math.max(96, runningSpeed(end) * 5);
   return end;
@@ -631,10 +701,7 @@ function spawnPattern(pos) {
       const variants = slot === 'low' ? ['alarm', 'gang'] : ['thanos', 'emo', 'phone'];
       const obstaclePos = pos + 2.4;
       addObs(slot === 'bing' ? slot : pick(variants), lane, obstaclePos);
-      if (slot === 'low') {
-        const airDistance = runningSpeed(obstaclePos) * JUMP_TIME;
-        addJumpCoins(lane, obstaclePos - airDistance / 2, 0, lane, obstaclePos + airDistance / 2, 0);
-      }
+      if (slot === 'low') addLowObstacleCoins(lane, obstaclePos);
     }
   }
   const coinStart = previousLane === G.openLane ? pos : pos + COIN_SPACING;
@@ -677,42 +744,72 @@ function addScenery(factory, x, pos, rotation = 0, y = 0.1, scale = 1, key = nul
   G.buildings.push({ trackPos: pos, mesh, far, key,
     fallbackFactory: streetKitReady || factory === Models.crosswalk ? null : factory });
 }
+function besidePond(pos, side) {
+  const center = side < 0 ? 30 : 122;
+  return Math.abs(pos % DISTRICT_LENGTH - center) < 12;
+}
 function spawnBuildings(pos) {
   const district = districtAt(pos), zone = DISTRICTS.indexOf(district);
+  const block = pos % DISTRICT_LENGTH;
   for (const side of [-1, 1]) {
     const opening = pos === 5;
-    if (!opening && Math.random() >= (zone === 2 ? 0.39 : 0.89)) continue;
+    if (zone === 2 && (besidePond(pos, side) || besidePond(pos, -side))) continue;
+    if (zone === 0 && side < 0 && block > 19 && block < 43) continue;
+    if (zone === 1 && side > 0 && block > 19 && block < 43) continue;
+    if (!opening && Math.random() >= (zone === 2 ? 0.26 : 0.91)) continue;
     const [name, sign, color] = opening ? district.buildings[side < 0 ? 0 : 1] : pick(district.buildings);
     const width = zone === 0 ? 5.7 : 5.3;
     const height = zone === 0 ? 7.3 : zone === 1 ? 4.9 : 3.1;
-    const angle = -side * (zone === 1 ? 0.52 : 0.39);
-    addScenery(() => Models.building(name, sign, color, width, height), side * rand(9.75, 11.5),
+    const angle = -side * (zone === 1 ? 0.63 : 0.46);
+    const setback = zone === 2 ? rand(12.4, 15.8) : rand(9.7, 11.4);
+    addScenery(() => Models.building(name, sign, color, width, height), side * setback,
       pos + rand(0.2, 2.8), angle, 0, rand(0.89, 1.07),
       `building|${name}|${sign}|${color}`);
   }
 }
+function spawnLandmarks(pos) {
+  const zone = DISTRICTS.indexOf(districtAt(pos));
+  if (zone === 0) {
+    addScenery(() => Models.landmark('CampusClock', '早八钟楼'), -10.2, pos, 0.54, 0, 1, 'landmark|clock');
+  } else if (zone === 1) {
+    addScenery(() => Models.landmark('MilkCourt', '奶昔补给站'), 10.2, pos, -0.61, 0, 1, 'landmark|milk');
+  } else {
+    const second = pos % DISTRICT_LENGTH > 100;
+    addScenery(() => Models.landmark('ParkPond'), second ? 11.8 : -11.55, pos,
+      second ? Math.PI : 0, 0, 1, 'landmark|pond');
+    addScenery(() => Models.landmark('ParkWalk'), second ? -11.8 : 11.8, pos - 1.5,
+      second ? Math.PI : 0, 0, 1, 'landmark|walk');
+    return second ? DISTRICT_LENGTH - 92 : 92;
+  }
+  return DISTRICT_LENGTH;
+}
 function spawnScenery(pos) {
-  const zone = Math.floor(Math.max(0, pos) / 220) % DISTRICTS.length;
+  const zone = DISTRICTS.indexOf(districtAt(pos));
   const index = Math.floor(pos / 14);
   for (const side of [-1, 1]) {
     const facing = side < 0 ? Math.PI / 2 : -Math.PI / 2;
     const addTree = blossom => addScenery(() => Models.tree(blossom), side * rand(5.8, 6.05), pos,
       rand(-0.38, 0.38), 0.12, rand(0.86, 1.08), `tree|${blossom ? 'blossom' : 'plane'}`);
     // 公交站穿插出现，其余位置按区域使用不同组合
-    if (index > 0 && index % 13 === (side < 0 ? 3 : 9)) {
+    if (zone !== 2 && index > 0 && index % 13 === (side < 0 ? 3 : 9)) {
       addScenery(Models.busStop, side * 5.4, pos, facing, 0.1, 1, 'busStop');
       continue;
     }
     if (zone === 2) {
-      addTree((index + (side > 0 ? 1 : 0)) % 4 === 0);
-      if (index % 3 === 0) addScenery(Models.flowerBed, side * 4.91, pos + 3.8, facing, 0.1, 1, 'flowerBed');
-      if (index % 4 === 1) addScenery(Models.bench, side * 5.8, pos + 4, facing, 0.1, 1, 'bench');
-      if (index % 5 === (side < 0 ? 2 : 4)) {
-        addScenery(Models.fountain, side * 7.75, pos + 7.1, 0, 0, 1, 'fountain');
+      const shore = besidePond(pos, side);
+      if (!shore) {
+        addTree(index % 3 === 0);
+        addScenery(Models.parkTree, side * rand(10.8, 15.6), pos + rand(-1, 2), 0, 0,
+          rand(1.08, 1.34), 'tree|poplar');
       }
-      if (index % 2 === (side < 0 ? 1 : 0)) {
-        addScenery(Models.garden, side * 15.1, pos + 5.5, facing, 0, rand(0.95, 1.24), 'garden');
-        addScenery(() => Models.tree(false), side * 18.1, pos + 7.7, rand(-0.4, 0.4), 0, rand(1.25, 1.56), 'tree|plane');
+      if (index % 3 === 0) addScenery(Models.flowerBed, side * 4.91, pos + 3.8, facing, 0.1, 1, 'flowerBed');
+      if (shore || index % 4 === 1) addScenery(Models.bench, side * 5.8, pos + 4, facing, 0.1, 1, 'bench');
+      if (!shore && index % 4 === (side < 0 ? 0 : 2)) {
+        addScenery(Models.garden, side * 8.7, pos + 5.5, facing, 0, rand(0.88, 1.15), 'garden');
+        addScenery(Models.parkTree, side * 19.6, pos + 8.4, 0.8, 0, rand(1.18, 1.45), 'tree|poplar');
+      }
+      if (!shore && index % 6 === (side < 0 ? 1 : 4)) {
+        addScenery(Models.fountain, side * 9.05, pos + 5.4, 0, 0, 0.92, 'fountain');
       }
     } else if (zone === 0) {
       if (index % 2 === 0) addTree(index % 6 === (side < 0 ? 0 : 2));
@@ -737,6 +834,7 @@ function disposeObject(root) {
 const sceneryStreams = [
   ['nextBuilding', pos => { spawnBuildings(pos); return rand(8.4, 11.1); }],
   ['nextScenery', pos => { spawnScenery(pos); return 14; }],
+  ['nextLandmark', spawnLandmarks],
   ['nextCrosswalk', pos => { addScenery(Models.crosswalk, 0, pos, 0, 0.031, 1, 'crosswalk'); return 130; }],
   ['nextLamp', pos => {
     const side = (Math.floor(pos / 16) % 2) ? 1 : -1;
@@ -744,9 +842,10 @@ const sceneryStreams = [
     return 16;
   }],
   ['nextGantry', pos => {
-    const text = pick([districtAt(pos).name, '奶娃快跑', '加油奥利给', '相信光', '冲鸭', '666']);
-    addScenery(() => Models.gantry(text), 0, pos, 0, 0, 1, `gantry|${text}`);
-    return 50;
+    const district = districtAt(pos);
+    const market = district === DISTRICTS[1];
+    addScenery(() => Models.gantry(district.name, market), 0, pos, 0, 0, 1, `gantry|${district.name}`);
+    return 68;
   }],
 ];
 
@@ -782,7 +881,7 @@ function ensureWorld() {
   G.objects.length = write;
   write = 0;
   for (const b of G.buildings) {
-    if (b.trackPos - G.distance > -10) G.buildings[write++] = b;
+    if (b.trackPos - G.distance > -10 - (b.mesh.userData.sceneryTail ?? 0)) G.buildings[write++] = b;
     else retireScenery(b);
   }
   G.buildings.length = write;
@@ -927,6 +1026,7 @@ function moveLane(dir) {
   if (next === G.lane) return;
   G.lane = next;
   if (G.sliding > 0) G.sliding = 0; // 左右滑可取消奶蛋出击，更丝滑
+  bodyMotion(dir < 0 ? 'DodgeLeft' : 'DodgeRight', 0.32);
   AudioSys.dash(); AudioSys.fastSay('闪身步!'); popup('闪身步!', '#8fe8ff');
 }
 function doJump() {
@@ -945,16 +1045,39 @@ function doSlide() {
 }
 
 /* ---------- 碰撞与结算 ---------- */
+function bodyMotion(name, duration) {
+  G.motion = name;
+  G.motionUntil = G.t + duration;
+}
+
 function crash() {
-  G.state = 'dying'; G.deadTimer = 1.0; G.shake = 1;
+  G.state = 'dying';
+  G.deadTimer = CAPTURE_LENGTH;
+  G.shake = 0.44;
+  G.capture = {
+    from: chaser.visible ? chaser.position.clone()
+      : new THREE.Vector3(G.px, getTruckSurface(G.distance - 3.9, G.px)?.height ?? 0, 3.9),
+    side: G.px > 0 ? -1 : 1, height: G.py, touched: false, signs: [],
+  };
+  G.capture.from.z = THREE.MathUtils.clamp(G.capture.from.z, 1.35, 5.8);
+  for (const obstacle of G.objects) {
+    if (obstacle.kind !== 'obs' || Math.abs(obstacle.trackPos - G.distance) > 18) continue;
+    obstacle.mesh.traverse(node => {
+      if (!node.isSprite || !node.visible) return;
+      node.visible = false;
+      G.capture.signs.push(node);
+    });
+  }
+  setCoach('');
   AudioSys.eh();
-  if (Math.random() < 0.5) popup('你干嘛~', '#ff9fcf'); // 梗弹窗保留，音频已移除
+  popupsEl.replaceChildren();
   AudioSys.noise(0.3, 0.15, 200); AudioSys.duckBGM(true);
   burst(G.px, G.py + 1, 0, 0xff5c5c, 24, 10);
   burst(G.px, G.py + 1, 0, 0xffd93f, 12, 8);
 }
 function showGameOver() {
   G.state = 'over';
+  setCoach('');
   const isRecord = G.score > G.best;
   if (isRecord) { G.best = G.score; localStorage.setItem('naiwa-best', String(G.best)); }
   document.getElementById('final-score').textContent = G.score;
@@ -969,6 +1092,7 @@ function showGameOver() {
   if (foot) foot.textContent = pick(OVER_FEET);
   document.getElementById('gameover').classList.remove('hidden');
   document.getElementById('hud').classList.add('hidden');
+  document.getElementById('btn-restart').focus({ preventScroll: true });
   if (isRecord) AudioSys.say('遥遥领先!', 0);
 }
 function collectCoin(o, at) {
@@ -993,10 +1117,11 @@ function applyPower(o) {
   else { G.magnet = 8; popup('库里库里~', '#8fe8ff'); AudioSys.say('磁吸奶瓶,吸!', 1); }
 }
 function hitObstacle(o) {
-  if (G.grace > 0) { crash(); return; }
   // 小障碍碎掉，货车仍然留在赛道上。
   if (!TRUCK_TYPES[o.type]) { o.resolved = true; o.destroyed = true; }
+  if (G.grace > 0) { crash(); return; }
   G.grace = 5; G.shake = 0.7;
+  bodyMotion('Stumble', 0.48);
   startChase();
   burst(G.px, G.py + 1, 0, 0xffb03f, 22, 11);
   burst(G.px, G.py + 1.3, 0, 0xff5c5c, 12, 8);
@@ -1087,7 +1212,10 @@ function landPlayer() {
   G.vy = 0;
   G.airTime = 0;
   G.grounded = true;
-  if (G.jumping) burst(G.px, G.py + 0.12, 0, 0xfff6e3, 6, 3.2);
+  if (G.jumping) {
+    burst(G.px, G.py + 0.12, 0, 0xfff6e3, 6, 3.2);
+    bodyMotion('Land', 0.25);
+  }
   G.jumping = false;
   if (G.pendingSlide) {
     G.pendingSlide = false;
@@ -1184,7 +1312,15 @@ function update(dt) {
     return;
   }
   if (G.state === 'dying') {
-    G.deadTimer -= dt;
+    G.deadTimer = Math.max(0, G.deadTimer - dt);
+    const elapsed = CAPTURE_LENGTH - G.deadTimer;
+    const surface = getTruckSurface(G.distance, G.px);
+    setPlayerSurface(surface?.height <= G.capture.height + 0.24 ? surface : null);
+    G.py = THREE.MathUtils.lerp(G.capture.height, G.support, THREE.MathUtils.smoothstep(elapsed, 0, 0.46));
+    if (elapsed >= CAPTURE_CONTACT && !G.capture.touched) {
+      G.capture.touched = true;
+      setCoach('被豆包老师抓到了！');
+    }
     updateWorldMeshes(dt);
     updatePlayerMesh(dt);
     updateEffects(dt);
@@ -1211,8 +1347,9 @@ function update(dt) {
   if (G.state === 'play' && !G.roofHint && G.grounded && G.surface && !G.surface.ramp &&
       G.surface.truck.mesh.userData.jumpMarker?.visible) {
     G.roofHint = true;
-    popup(handheld ? '到箭头处上滑，跳上下一辆车！' : '到箭头处按 ↑，跳上下一辆车！', '#ffe788');
+    G.roofHintUntil = G.t + 3.6;
   }
+  if (G.state === 'play') updateCoach();
   updateWorldMeshes(dt);
   updatePlayerMesh(dt);
   updateEffects(dt);
@@ -1231,6 +1368,7 @@ function updatePosts() {
   posts.instanceMatrix.needsUpdate = true;
 }
 function updateWorldMeshes(dt) {
+  updateDistrictArt();
   trackTex.offset.y = -(G.distance / 10);
   sidewalkTex.offset.y = G.distance / 10;
   lawnTex.offset.y = G.distance * 84 / 600;
@@ -1284,7 +1422,10 @@ function updateWorldMeshes(dt) {
     }
     if (mesh.userData.streetShadow) mesh.castShadow = !handheld && mesh.position.z > -29;
   }
-  for (const c of clouds) { c.position.x += dt * 1.5; if (c.position.x > 70) c.position.x = -70; }
+  for (const cloud of clouds) {
+    cloud.position.x += dt * 0.48;
+    if (cloud.position.x > 184) cloud.position.x = -184;
+  }
 }
 
 function updatePlayerMesh(dt) {
@@ -1296,7 +1437,8 @@ function updatePlayerMesh(dt) {
   const tilt = (LANE_X[G.lane] - G.px) / 2.4;
   const swing = Math.sin(G.phase);
 
-  player.visible = menu || G.grace <= 0 || Math.floor(G.t * 12) % 2 === 0;
+  const motion = G.motionUntil > G.t ? G.motion : '';
+  player.visible = menu || fallen || motion === 'Stumble' || G.grace <= 0 || Math.floor(G.t * 12) % 2 === 0;
   player.position.set(G.px, G.py, 0);
   player.rotation.set(0, 0, -tilt * (egg ? 0.15 : 0.25));
   ud.spin.rotation.x = 0;
@@ -1305,11 +1447,13 @@ function updatePlayerMesh(dt) {
   for (const leg of ud.legs) leg.visible = ud.torso.visible;
 
   if (menu) {
-    player.position.set(-menuCharacterX(), 0, 0.75);
-    player.rotation.set(0, Math.PI + 0.30, 0);
+    const portrait = camera.aspect < 0.95;
+    player.position.set(portrait ? -0.96 : 1.75, 0, 0.63);
+    player.rotation.set(0, Math.PI + 0.23, 0);
   } else if (fallen) {
-    player.rotation.set(-Math.PI / 2.2, 0, 0.4);
-    player.position.y += 0.3;
+    const elapsed = CAPTURE_LENGTH - G.deadTimer;
+    const turn = THREE.MathUtils.smoothstep(elapsed, 0.20, 0.75);
+    player.rotation.set(0, -(G.capture?.side ?? 1) * 1.82 * turn, turn * 0.1);
   } else if (egg) {
     ud.egg.rotation.x = -G.rollTime * 13;
     player.position.y += 0.025;
@@ -1320,7 +1464,8 @@ function updatePlayerMesh(dt) {
   if (runnerRig) {
     runnerRig.model.visible = !egg;
     if (!egg) {
-      const action = menu || fallen ? 'Idle' : airborne ? 'Jump' : 'Run';
+      const action = menu ? (G.t % 10 >= 2.5 && G.t % 10 < 4 ? 'Greeting' : 'Idle')
+        : fallen ? 'Caught' : airborne && motion !== 'Stumble' ? 'Jump' : motion || 'Run';
       const speed = action === 'Run' ? Math.min(2.1, G.speed / 13 * (G.sprint > 0 ? 1.3 : 1)) : 1;
       runnerRig.animate(action, dt, speed);
     }
@@ -1335,14 +1480,16 @@ function updatePlayerMesh(dt) {
 
   ud.aura.visible = G.sprint > 0;
   if (ud.aura.visible) ud.aura.children.forEach((f, i) => f.scale.setScalar(0.7 + Math.abs(Math.sin(G.t * 20 + i)) * 0.5));
-  ud.magIcon.visible = G.magnet > 0;
-  if (G.shield > 0 && !ud.shieldMesh) {
-    const bubble = new THREE.Mesh(new THREE.SphereGeometry(1.4, 18, 14), new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.3 }));
+  const shielded = G.shield > 0;
+  if (shielded && !ud.shieldMesh) {
+    const bubble = new THREE.Mesh(new THREE.SphereGeometry(1.4, 18, 14), new THREE.MeshBasicMaterial({
+      color: 0xfff2b0, transparent: true, opacity: 0.3, depthWrite: false,
+    }));
     bubble.position.y = 1.1;
     player.add(bubble);
     ud.shieldMesh = bubble;
   }
-  if (ud.shieldMesh) ud.shieldMesh.visible = G.shield > 0;
+  if (ud.shieldMesh) ud.shieldMesh.visible = shielded;
 }
 
 const RAMP_ANGLE = Math.atan2(TRUCK.roofHeight, TRUCK.rampLength);
@@ -1381,23 +1528,58 @@ function updateEffects(dt) {
   G.particles.length = live;
   if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 1.8);
   const fovEff = G.speed * (G.sprint > 0 ? 1.55 : 1);
-  const fovT = Math.min(86, 62 + Math.max(0, fovEff - 13) * 0.5);
+  const narrow = camera.aspect < 0.95;
+  const fovT = G.state === 'menu' ? (narrow ? 55 : 49)
+    : G.capture ? (narrow ? 59 : 55) : Math.min(86, 62 + Math.max(0, fovEff - 13) * 0.5);
   camera.fov += (fovT - camera.fov) * Math.min(1, dt * 5);
   camera.updateProjectionMatrix();
+  if (G.state === 'menu') {
+    camera.position.set(narrow ? 0 : -0.52, narrow ? 3.57 : 2.88, narrow ? 8.1 : 6.8);
+    camera.lookAt(narrow ? 0 : -0.22, narrow ? 2.02 : 1.55, -7.7);
+    return;
+  }
   const shx = G.shake > 0 ? rand(-1, 1) * G.shake * 0.4 : 0;
   const shy = G.shake > 0 ? rand(-1, 1) * G.shake * 0.3 : 0;
   // 竖屏（手机）时把镜头拉远一点，避免奶娃糊满屏幕
   const portrait = camera.aspect < 0.85 ? 2.2 : 0;
   // 同车道追逐时从稍高的侧后方拍摄，也看得到前面的奶娃和障碍。
-  const chaseFrame = chaserRig && G.chaseActive
+  const chaseFrame = G.chaseActive
     ? Math.max(0, Math.min(1, G.chaseTime / 0.65, (CHASE_DURATION - G.chaseTime) / 0.7)) : 0;
   camera.position.set(G.px * 0.55 + chaseFrame + shx,
     3.4 + G.py + portrait * 0.35 + chaseFrame * 0.55 + shy,
     7.2 + portrait + G.py * 0.55 + chaseFrame * 0.85);
-  camera.lookAt(G.px * 0.7 + chaseFrame * 0.1, 1.5 + G.py - chaseFrame * 0.58, -9 + chaseFrame * 2.5);
+  let targetX = G.px * 0.7 + chaseFrame * 0.1;
+  let targetY = 1.5 + G.py - chaseFrame * 0.58;
+  let targetZ = -9 + chaseFrame * 2.5;
+  if (G.capture) {
+    const cut = THREE.MathUtils.smoothstep(CAPTURE_LENGTH - G.deadTimer, 0.05, 0.70);
+    const { side } = G.capture;
+    camera.position.set(
+      THREE.MathUtils.lerp(camera.position.x, G.px + side * (narrow ? 4.95 : 3.65), cut),
+      THREE.MathUtils.lerp(camera.position.y, G.py + 2.48, cut),
+      THREE.MathUtils.lerp(camera.position.z, narrow ? 3.43 : 2.15, cut)
+    );
+    targetX = THREE.MathUtils.lerp(targetX, G.px - side * 0.12, cut);
+    targetY = THREE.MathUtils.lerp(targetY, G.py + 1.06, cut);
+    targetZ = THREE.MathUtils.lerp(targetZ, narrow ? 0.18 : 0.38, cut);
+  }
+  camera.lookAt(targetX, targetY, targetZ);
 }
 
 /* ---------- HUD ---------- */
+const coach = document.getElementById('coach');
+function setCoach(text) {
+  if (coach.textContent !== text) coach.textContent = text;
+  coach.classList.toggle('hidden', !text);
+}
+function updateCoach() {
+  if (G.roofHintUntil > G.t) {
+    setCoach(handheld ? '看到车顶箭头时，上滑跳到下一辆车' : '看到车顶箭头时，按 ↑ 跳到下一辆车');
+  } else if (G.distance < 22) {
+    setCoach('沿地面奶瓶绕行，也可以从中间斜坡上车');
+  } else setCoach('');
+}
+
 const elScore = document.getElementById('score');
 const elCoins = document.getElementById('coins');
 const elPowerbars = document.getElementById('powerbars');
@@ -1445,11 +1627,14 @@ function updateHUD() {
 
 /* ---------- 流程 ---------- */
 function resetGame(keepScenery = false) {
+  for (const sign of G.capture?.signs ?? []) sign.visible = true;
   for (const o of G.objects) release(o);
   for (const flight of G.flyingObstacles) releaseFlight(flight);
   if (!keepScenery) {
     for (const b of G.buildings) retireScenery(b);
-    Object.assign(G, { buildings: [], nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95 });
+    Object.assign(G, {
+      buildings: [], nextBuilding: 5, nextLamp: 20, nextGantry: 60, nextScenery: 8, nextCrosswalk: 95, nextLandmark: 30,
+    });
   }
   for (const { m } of G.particles) { m.visible = false; partPool.push(m); }
   Object.assign(G, {
@@ -1460,29 +1645,61 @@ function resetGame(keepScenery = false) {
     truckDeck: [], lastTruckLayout: null,
     particles: [], flyingObstacles: [], shake: 0, deadTimer: 0, airTime: 0, support: 0, surface: null,
     grounded: true, jumping: false, jumpFrom: 0, speedTier: 0, chaseTime: 0, chaseActive: false,
+    motion: '', motionUntil: 0, capture: null, roofHintUntil: 0,
   });
   chaseTrail.length = 0;
   chaseTrail.push({ distance: 0, x: 0, y: 0 });
   puKey = ''; elPowerbars.innerHTML = '';
+  popupsEl.replaceChildren();
+  setCoach('');
   if (player.userData.shieldMesh) player.userData.shieldMesh.visible = false;
 }
 function startGame() {
+  if (G.state !== 'menu' && G.state !== 'over') return;
+  if (!bootReady) {
+    if (startRequested) return;
+    startRequested = true;
+    startButton.disabled = true;
+    startButton.setAttribute('aria-busy', 'true');
+    startLabel.textContent = '赛道准备中';
+    AudioSys.init();
+    AudioSys.duckBGM(true);
+    return;
+  }
+  startRequested = false;
   AudioSys.init(); AudioSys.click(); AudioSys.duckBGM(false);
-  revealBootBackdrop();
-  resetGame(G.state === 'menu');
+  bootBackdrop.hidden = true;
+  const fromHome = G.state === 'menu';
+  resetGame(fromHome);
   G.state = 'play';
   chaser.position.set(0, 0, 8);
   startChase();
-  document.getElementById('menu').classList.add('hidden');
+  if (fromHome) {
+    home.classList.add('leaving');
+    setTimeout(() => { if (G.state !== 'menu') home.classList.add('hidden'); }, 220);
+  }
   document.getElementById('gameover').classList.add('hidden');
   document.getElementById('pause').classList.add('hidden');
   document.getElementById('hud').classList.remove('hidden');
+  ensureWorld();
+  updateCoach();
   AudioSys.say('奶娃快跑,冲鸭!', 0); popup('冲鸭!', '#ffd93f');
   updateHUD();
 }
 function togglePause() {
-  if (G.state === 'play') { G.state = 'pause'; randomizePause(); document.getElementById('pause').classList.remove('hidden'); AudioSys.duckBGM(true); }
-  else if (G.state === 'pause') { G.state = 'play'; document.getElementById('pause').classList.add('hidden'); AudioSys.duckBGM(false); }
+  if (G.state === 'play') {
+    G.state = 'pause';
+    randomizePause();
+    setCoach('');
+    document.getElementById('pause').classList.remove('hidden');
+    document.getElementById('btn-resume').focus({ preventScroll: true });
+    AudioSys.duckBGM(true);
+  } else if (G.state === 'pause') {
+    G.state = 'play';
+    document.getElementById('pause').classList.add('hidden');
+    updateCoach();
+    AudioSys.duckBGM(false);
+  }
 }
 function toggleMute() {
   AudioSys.setMuted(!AudioSys.muted);
@@ -1490,8 +1707,6 @@ function toggleMute() {
 }
 function randomizeMenu() {
   document.getElementById('menu-tip').textContent = pick(MENU_TIPS);
-  document.getElementById('menu-tagline').textContent = pick(MENU_TAGLINES);
-  document.getElementById('btn-start').textContent = pick(START_LABELS);
 }
 function randomizePause() {
   document.getElementById('pause-title').textContent = pick(PAUSE_TITLES);
@@ -1501,12 +1716,13 @@ function showMenu() {
   resetGame();
   G.state = 'menu';
   AudioSys.duckBGM(false);
-  document.getElementById('menu').classList.remove('hidden');
+  home.classList.remove('hidden', 'leaving');
   document.getElementById('gameover').classList.add('hidden');
   document.getElementById('pause').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('best-menu').textContent = G.best;
   randomizeMenu();
+  startButton.focus({ preventScroll: true });
 }
 function pauseToMenu() {
   if (G.state === 'pause') showMenu();
@@ -1515,10 +1731,15 @@ function pauseToMenu() {
 /* ---------- 输入 ---------- */
 window.addEventListener('keydown', e => {
   const k = e.key;
+  const confirm = k === 'Enter' || k === ' ';
+  if (confirm && G.state !== 'play' && e.target instanceof HTMLButtonElement) return;
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(k)) e.preventDefault();
   if (k === 'm' || k === 'M') { toggleMute(); return; }
-  if (G.state === 'menu' || G.state === 'over') { if (k === 'Enter' || k === ' ') startGame(); return; }
-  if (k === 'p' || k === 'P' || k === 'Escape') { togglePause(); return; }
+  if (G.state === 'menu' || G.state === 'over') { if (confirm && !e.repeat) startGame(); return; }
+  if (k === 'p' || k === 'P' || k === 'Escape' || (confirm && G.state === 'pause')) {
+    if (!e.repeat) togglePause();
+    return;
+  }
   if (G.state !== 'play') return;
   if (k === 'ArrowLeft' || k === 'a' || k === 'A') moveLane(-1);
   else if (k === 'ArrowRight' || k === 'd' || k === 'D') moveLane(1);
@@ -1539,7 +1760,11 @@ cv.addEventListener('touchmove', e => {
   else if (dy < 0) doJump(); else doSlide();
 }, { passive: false });
 cv.addEventListener('touchend', e => { e.preventDefault(); if (!touchStart) return; const dt = performance.now() - touchStart.time; if (!touchSwiped && dt < 250 && G.state === 'play') doJump(); touchStart = null; }, { passive: false });
+cv.addEventListener('touchcancel', () => { touchStart = null; touchSwiped = false; });
 window.addEventListener('blur', () => { if (G.state === 'play') togglePause(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && G.state === 'play') togglePause();
+});
 document.getElementById('btn-start').addEventListener('click', startGame);
 document.getElementById('btn-restart').addEventListener('click', startGame);
 document.getElementById('btn-menu').addEventListener('click', showMenu);
@@ -1588,3 +1813,4 @@ function loop(now) {
   }
 }
 requestAnimationFrame(loop);
+document.documentElement.classList.add('game-mounted');
