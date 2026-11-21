@@ -16,6 +16,7 @@
 
   function startFromKeyboard(event) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLInputElement) return;
     event.preventDefault();
     requestStart();
   }

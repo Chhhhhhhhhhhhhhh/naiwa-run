@@ -20,23 +20,38 @@
 
   <div id="hud" class="hidden">
     <div class="hud-left">
-      <div class="hud-score"><span id="score">0</span><small>分</small></div>
+      <div class="hud-score"><span id="score">0</span><small>米</small></div>
       <div class="hud-coins">🍼 <span id="coins">0</span></div>
       <div id="powerbars"></div>
     </div>
     <div class="hud-right">
-      <button id="btn-mute" title="声音开关 (M)">🔊</button>
-      <button id="btn-pause" title="暂停 (P)">⏸</button>
+      <div class="volume-widget" data-volume-widget>
+        <button id="btn-mute" type="button" class="icon-btn volume-trigger" aria-label="调节音量" aria-expanded="false" title="调节音量 (M 静音)">🔊</button>
+        <div class="volume-popover hidden" role="dialog" aria-label="音量调节">
+          <button type="button" class="volume-mute-btn" aria-label="静音开关" title="静音开关 (M)">🔊</button>
+          <input type="range" class="volume-slider" min="0" max="100" step="1" value="85" aria-label="总音量">
+          <span class="volume-value">85%</span>
+        </div>
+      </div>
+      <button id="btn-pause" class="icon-btn" title="暂停 (P)">⏸</button>
     </div>
   </div>
 
   <div id="menu" class="overlay">
+    <div class="volume-widget menu-volume" data-volume-widget>
+      <button id="btn-menu-volume" type="button" class="icon-btn volume-trigger" aria-label="调节音量" aria-expanded="false" title="调节音量 (M 静音)">🔊</button>
+      <div class="volume-popover hidden" role="dialog" aria-label="音量调节">
+        <button type="button" class="volume-mute-btn" aria-label="静音开关" title="静音开关 (M)">🔊</button>
+        <input type="range" class="volume-slider" min="0" max="100" step="1" value="85" aria-label="总音量">
+        <span class="volume-value">85%</span>
+      </div>
+    </div>
     <div class="home-panel">
       <h1 class="game-title">奶娃快跑</h1>
       <p class="tagline">沿车顶连跳，甩开豆包老师。</p>
       <div class="home-actions">
         <button id="btn-start" class="home-start"><span id="start-label">开跑</span><span class="start-arrow" aria-hidden="true">→</span></button>
-        <div class="best-line"><small>最佳得分</small><strong><span id="best-menu">0</span><small>分</small></strong></div>
+        <div class="best-line"><small>最佳距离</small><strong><span id="best-menu">0</span><small>米</small></strong></div>
       </div>
       <div class="loading-panel">
         <div class="loading-copy">
@@ -56,9 +71,32 @@
     </div>
   </div>
 
+  <div id="intro" class="hidden" aria-live="polite">
+    <div class="intro-bar intro-bar-top"></div>
+    <div class="intro-bar intro-bar-bottom"></div>
+    <div class="intro-flash"></div>
+    <div class="intro-card">
+      <small>奶娃快跑 · 开场</small>
+      <strong>作业没交</strong>
+      <span>放学铃响，豆包老师就在旁边…</span>
+    </div>
+    <div class="intro-sfx" aria-hidden="true"></div>
+    <div class="intro-line">
+      <span class="intro-speaker"></span>
+      <span class="intro-text"></span>
+    </div>
+    <button type="button" class="intro-skip" id="btn-intro-skip">跳过 <span aria-hidden="true">▸▸</span></button>
+  </div>
+
   <div id="pause" class="overlay hidden">
     <h2 class="pause-title" id="pause-title">摸鱼中…</h2>
     <p class="pause-quip" id="pause-quip">如何呢，又能怎？先歇一下。</p>
+    <div class="pause-volume" data-volume-inline aria-label="暂停界面音量调节">
+      <span class="pause-volume-label">音量</span>
+      <button type="button" class="volume-mute-btn" aria-label="静音开关" title="静音开关 (M)">🔊</button>
+      <input type="range" class="volume-slider" min="0" max="100" step="1" value="85" aria-label="总音量">
+      <span class="volume-value">85%</span>
+    </div>
     <div class="over-btns">
       <button id="btn-resume" class="big-btn">继续卷</button>
       <button id="btn-pause-menu" class="big-btn ghost-btn">返回开始页</button>
@@ -69,9 +107,9 @@
     <h2 class="over-title">芭比Q了！</h2>
     <p id="verdict" class="verdict"></p>
     <div class="over-stats">
-      <div><b id="final-score">0</b><small>本次得分</small></div>
+      <div><b><span id="final-score">0</span><small class="stat-unit">米</small></b><small>本次距离</small></div>
       <div><b id="final-coins">0</b><small>奶币</small></div>
-      <div><b id="final-best">0</b><small>最佳纪录</small></div>
+      <div><b><span id="final-best">0</span><small class="stat-unit">米</small></b><small>最佳距离</small></div>
     </div>
     <p id="new-record" class="new-record hidden">🏆 新纪录！遥遥领先！</p>
     <div class="over-btns">
