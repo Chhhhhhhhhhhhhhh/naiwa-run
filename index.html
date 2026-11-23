@@ -7,10 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='88'%3E%F0%9F%8D%BC%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<link rel="stylesheet" href="style.css">
-<link rel="preload" href="game.js" as="script">
-<link rel="preload" href="assets/home-poster.webp" as="image" media="(min-aspect-ratio: 19/20)">
-<link rel="preload" href="assets/home-poster-mobile.webp" as="image" media="(max-aspect-ratio: 19/20)">
+<link rel="stylesheet" href="style.css?v=20261128">
+<link rel="preload" href="game.js?v=20261130" as="script">
 </head>
 <body>
 <div id="stage">
@@ -21,7 +19,10 @@
   <div id="hud" class="hidden">
     <div class="hud-left">
       <div class="hud-score"><span id="score">0</span><small>米</small></div>
-      <div class="hud-coins">🍼 <span id="coins">0</span></div>
+      <div class="hud-coins-row">
+        <div class="hud-coins">🍼 <span id="coins">0</span></div>
+        <div id="overdrive-badge" class="hud-overdrive hidden" aria-live="polite">🔥 狂暴 ×2</div>
+      </div>
       <div id="powerbars"></div>
     </div>
     <div class="hud-right">
@@ -52,6 +53,24 @@
       <div class="home-actions">
         <button id="btn-start" class="home-start"><span id="start-label">开跑</span><span class="start-arrow" aria-hidden="true">→</span></button>
         <div class="best-line"><small>最佳距离</small><strong><span id="best-menu">0</span><small>米</small></strong></div>
+      </div>
+      <div class="home-ach-row">
+        <button id="btn-shop-menu" type="button" class="ach-entry-btn shop-entry-btn" aria-label="打开奶瓶商店">
+          <span class="ach-entry-trophy" aria-hidden="true">🏪</span>
+          <span class="ach-entry-text">
+            <strong>奶瓶商店</strong>
+            <small id="shop-menu-sub">用奶瓶兑好物</small>
+          </span>
+          <span class="ach-entry-count shop-entry-count" id="shop-menu-bottles">🍼 0</span>
+        </button>
+        <button id="btn-ach-menu" type="button" class="ach-entry-btn" aria-label="打开成就图鉴">
+          <span class="ach-entry-trophy" aria-hidden="true">🏆</span>
+          <span class="ach-entry-text">
+            <strong>成就图鉴</strong>
+            <small id="ach-menu-rank">🍼 早八菜鸟</small>
+          </span>
+          <span class="ach-entry-count" id="ach-menu-count">0/50</span>
+        </button>
       </div>
       <div class="loading-panel">
         <div class="loading-copy">
@@ -99,6 +118,7 @@
     </div>
     <div class="over-btns">
       <button id="btn-resume" class="big-btn">继续卷</button>
+      <button id="btn-ach-pause" type="button" class="big-btn ghost-btn ach-inline-btn">🏆 成就 <span class="ach-pill-num" id="ach-pause-count">0/50</span></button>
       <button id="btn-pause-menu" class="big-btn ghost-btn">返回开始页</button>
     </div>
   </div>
@@ -108,22 +128,118 @@
     <p id="verdict" class="verdict"></p>
     <div class="over-stats">
       <div><b><span id="final-score">0</span><small class="stat-unit">米</small></b><small>本次距离</small></div>
-      <div><b id="final-coins">0</b><small>奶币</small></div>
+      <div><b id="final-coins">0</b><small>本局奶瓶</small></div>
+      <div><b><span id="final-total-coins">0</span><small class="stat-unit">🍼</small></b><small>奶瓶余额</small></div>
       <div><b><span id="final-best">0</span><small class="stat-unit">米</small></b><small>最佳距离</small></div>
     </div>
     <p id="new-record" class="new-record hidden">🏆 新纪录！遥遥领先！</p>
+    <div id="over-ach-strip" class="over-ach-strip hidden" aria-label="本局新解锁成就">
+      <div class="over-ach-head">🎉 本局新达成成就（点击看详细说明）</div>
+      <div id="over-ach-list" class="over-ach-list"></div>
+    </div>
     <div class="over-btns">
       <button id="btn-restart" class="big-btn">再跑一局</button>
+      <button id="btn-ach-over" type="button" class="big-btn ghost-btn ach-inline-btn">🏆 成就 <span class="ach-pill-num" id="ach-over-count">0/50</span></button>
       <button id="btn-menu" class="big-btn ghost-btn">返回菜单</button>
     </div>
     <p class="meme-foot" id="over-foot">奶娃倒下了，但没完全倒下</p>
+  </div>
+
+  <div id="ach-toast-layer" aria-live="polite" aria-atomic="true"></div>
+
+  <div id="ach-modal" class="ach-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ach-modal-title">
+    <div class="ach-dialog" tabindex="-1">
+      <div class="ach-header">
+        <div class="ach-header-title">
+          <h2 id="ach-modal-title">🏆 奶娃成就图鉴</h2>
+          <small>点击已解锁成就可查看详细档案与豆包老师批注</small>
+        </div>
+        <button id="btn-ach-close" type="button" class="icon-btn ach-close-btn" aria-label="关闭成就图鉴" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="ach-scroll">
+        <div id="ach-rank-card" class="ach-rank-card"></div>
+        <div id="ach-lifetime-stats" class="ach-lifetime-stats"></div>
+        <div id="ach-tabs" class="ach-tabs" role="tablist" aria-label="成就分类"></div>
+        <div id="ach-grid" class="ach-grid"></div>
+      </div>
+      <div class="ach-footer">
+        <button id="btn-ach-reset" type="button" class="ach-reset-btn">重置成就数据</button>
+        <span class="ach-footer-tip">纯荣誉收藏 · 成就自动保存在本机浏览器</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="ach-detail" class="ach-detail hidden" role="dialog" aria-modal="true" aria-labelledby="ach-detail-title">
+    <div class="ach-detail-card" data-tier="common">
+      <div class="ach-detail-glow" aria-hidden="true"></div>
+      <button id="btn-ach-detail-close" type="button" class="ach-detail-x" aria-label="关闭成就详情" title="关闭 (Esc)">✕</button>
+      <div class="ach-detail-hero">
+        <div id="ach-detail-icon" class="ach-detail-icon">🏆</div>
+        <span id="ach-detail-tier" class="ach-tier-pill" data-tier="common">常规成就</span>
+        <h3 id="ach-detail-title" class="ach-detail-title">成就名称</h3>
+      </div>
+      <div class="ach-detail-section">
+        <div class="ach-detail-label">🎯 达成条件</div>
+        <p id="ach-detail-cond" class="ach-detail-cond"></p>
+        <p id="ach-detail-snap" class="ach-detail-snap"></p>
+      </div>
+      <div class="ach-detail-section">
+        <div class="ach-detail-label">📖 详细说明</div>
+        <p id="ach-detail-story" class="ach-detail-story"></p>
+      </div>
+      <div class="ach-detail-teacher">
+        <span class="ach-teacher-badge">豆包老师批注</span>
+        <p id="ach-detail-note"></p>
+      </div>
+      <div id="ach-detail-meta" class="ach-detail-meta"></div>
+      <div class="ach-detail-actions">
+        <button id="btn-ach-replay" type="button" class="ach-replay-btn">🔊 重播解锁特效</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="shop-modal" class="ach-modal shop-modal hidden" role="dialog" aria-modal="true" aria-labelledby="shop-modal-title">
+    <div class="ach-dialog shop-dialog">
+      <div class="ach-header shop-header">
+        <div class="ach-header-title">
+          <h2 id="shop-modal-title">🏪 奶娃小卖部 · 奶瓶商店</h2>
+          <small>分为「购买专区」与「升级专区」，用跑酷攒下的奶瓶武装奶娃！</small>
+        </div>
+        <div class="shop-header-right">
+          <div id="shop-wallet-pill" class="shop-wallet-pill" title="当前可用奶瓶余额">
+            <span class="shop-wallet-icon" aria-hidden="true">🍼</span>
+            <span class="shop-wallet-label">奶瓶余额</span>
+            <strong id="shop-balance-num">0</strong>
+          </div>
+          <button id="btn-shop-close" type="button" class="icon-btn ach-close-btn" aria-label="关闭奶瓶商店" title="关闭 (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="ach-scroll shop-scroll">
+        <div id="shop-notice" class="shop-notice" data-tone="info" role="status" aria-live="polite">
+          💡 提示：目前为商店测试版，每次跑酷拾取的奶瓶都会自动记入余额，具体局内加成后续实装。
+        </div>
+        <div id="shop-summary-stats" class="ach-lifetime-stats shop-summary-stats"></div>
+        <div id="shop-tabs" class="ach-tabs shop-tabs" role="tablist" aria-label="商店商品分类"></div>
+        <div id="shop-grid" class="shop-grid"></div>
+      </div>
+      <div class="ach-footer shop-footer">
+        <div class="shop-footer-btns">
+          <button id="btn-shop-test-add" type="button" class="shop-test-btn">🧪 测试领奶瓶 (+100 🍼)</button>
+          <button id="btn-shop-reset" type="button" class="ach-reset-btn">重置商店数据</button>
+        </div>
+        <span class="ach-footer-tip">奶瓶与已购商品自动保存在本机浏览器</span>
+      </div>
+    </div>
   </div>
 </div>
 
 <script src="vendor/three.min.js"></script>
 <script src="vendor/GLTFLoader.js"></script>
-<script src="models.js"></script>
-<script src="audio.js"></script>
-<script src="boot.js"></script>
+<script src="models.js?v=20261130"></script>
+<script src="home-stage.js?v=20261127"></script>
+<script src="audio.js?v=20261128"></script>
+<script src="achievements.js?v=20261124"></script>
+<script src="shop.js"></script>
+<script src="boot.js?v=20261130"></script>
 </body>
 </html>

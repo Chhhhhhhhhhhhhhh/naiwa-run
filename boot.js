@@ -15,6 +15,8 @@
   }
 
   function startFromKeyboard(event) {
+    if (typeof AchievementSys !== 'undefined' && AchievementSys.isModalOpen()) return;
+    if (typeof ShopSys !== 'undefined' && ShopSys.isModalOpen()) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLInputElement) return;
     event.preventDefault();
@@ -24,7 +26,7 @@
   button.addEventListener('click', requestStart);
   window.addEventListener('keydown', startFromKeyboard);
   const game = document.createElement('script');
-  game.src = 'game.js';
+  game.src = 'game.js?v=20261130';
   function handoff() {
     button.removeEventListener('click', requestStart);
     window.removeEventListener('keydown', startFromKeyboard);

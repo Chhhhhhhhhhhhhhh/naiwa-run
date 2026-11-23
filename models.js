@@ -21,10 +21,161 @@ const Models = (() => {
     gradientMap.needsUpdate = true;
     return gradientMap;
   }
-  const T = (color) => new THREE.MeshToonMaterial({ color, gradientMap: toonGrad() });
-  const L = (color) => new THREE.MeshLambertMaterial({ color });
-  const P = (color, shininess = 30, emissive = 0x000000) => new THREE.MeshPhongMaterial({ color, shininess, specular: 0x3a3a3a, emissive });
-  const Basic = (color) => new THREE.MeshBasicMaterial({ color });
+  const worldBendUniform = { value: new THREE.Vector2(0, 0) };
+  const bendViewMatUniform = { value: new THREE.Matrix4() };
+  const windTimeUniform = { value: 0 };
+  const groundScrollUniform = { value: 0 };
+  function setWorldBend(x, y, cam = null) {
+    worldBendUniform.value.set(x, y);
+    if (cam) {
+      cam.updateMatrixWorld();
+      bendViewMatUniform.value.copy(cam.matrixWorld).invert();
+    }
+  }
+  function setWorldTime(t, distance = 0) {
+    windTimeUniform.value = t;
+    groundScrollUniform.value = distance;
+  }
+  function applyWorldBend(material, opts = null) {
+    const wind = Boolean(opts?.wind);
+    const windAmp = opts?.windAmp ?? 1.0;
+    const antiTileGrass = Boolean(opts?.antiTileGrass);
+    if (!material || material.isShaderMaterial || material.userData?.worldBent) return material;
+    material.userData = { ...(material.userData || {}), worldBent: true };
+    if (material.isSpriteMaterial) {
+      material.onBeforeCompile = shader => {
+        shader.uniforms.uWorldBend = worldBendUniform;
+        shader.uniforms.uBendViewMat = bendViewMatUniform;
+        shader.vertexShader = shader.vertexShader
+          .replace('void main() {', 'uniform vec2 uWorldBend;\nuniform mat4 uBendViewMat;\nvoid main() {')
+          .replace(
+            'vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );',
+            `vec4 bendWorldPos = modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;`
+          );
+      };
+      material.customProgramCacheKey = () => 'sprite-world-bend';
+    } else {
+      const cacheKey = antiTileGrass ? 'mesh-world-bend-grass'
+        : wind ? 'mesh-world-bend-wind' : 'mesh-world-bend';
+      material.onBeforeCompile = shader => {
+        shader.uniforms.uWorldBend = worldBendUniform;
+        shader.uniforms.uBendViewMat = bendViewMatUniform;
+        let vHead = 'uniform vec2 uWorldBend;\nuniform mat4 uBendViewMat;\n';
+        if (wind) {
+          shader.uniforms.uWindTime = windTimeUniform;
+          shader.uniforms.uWindAmp = { value: windAmp };
+          shader.uniforms.uGroundScroll = groundScrollUniform;
+          vHead += 'uniform float uWindTime;\nuniform float uWindAmp;\n';
+          if (!antiTileGrass) vHead += 'uniform float uGroundScroll;\n';
+        }
+        if (antiTileGrass) {
+          shader.uniforms.uGroundScroll = groundScrollUniform;
+          vHead += 'uniform float uGroundScroll;\nvarying vec2 vGrassWorld;\n';
+        }
+        shader.vertexShader = shader.vertexShader.replace('void main() {', vHead + 'void main() {');
+        if (wind) {
+          shader.vertexShader = shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>
+            vec3 windAnchor = modelMatrix[3].xyz;
+            #ifdef USE_INSTANCING
+              windAnchor += instanceMatrix[3].xyz;
+            #endif
+            float windWeight = smoothstep( 0.75, 3.6, transformed.y );
+            float windPhase = uWindTime * 2.15 + windAnchor.x * 0.41 + ( windAnchor.z - uGroundScroll ) * 0.23 + transformed.x * 0.65;
+            transformed.x += sin( windPhase ) * 0.095 * uWindAmp * windWeight;
+            transformed.z += cos( windPhase * 0.83 + 0.7 ) * 0.06 * uWindAmp * windWeight;`
+          );
+        }
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <project_vertex>',
+          `vec4 mvPosition = vec4( transformed, 1.0 );
+          #ifdef USE_INSTANCING
+            mvPosition = instanceMatrix * mvPosition;
+          #endif
+          vec4 bendWorldPos = modelMatrix * mvPosition;
+          ${antiTileGrass ? 'vGrassWorld = vec2( bendWorldPos.x, bendWorldPos.z - uGroundScroll );' : ''}
+          float bendDist = max( 0.0, -bendWorldPos.z );
+          float bendDist2 = bendDist * bendDist;
+          mvPosition = modelViewMatrix * mvPosition;
+          mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+          gl_Position = projectionMatrix * mvPosition;`
+        );
+        if (antiTileGrass) {
+          shader.fragmentShader = shader.fragmentShader
+            .replace('void main() {', 'varying vec2 vGrassWorld;\nvoid main() {')
+            .replace(
+              'gl_FragColor = vec4( outgoingLight, diffuseColor.a );',
+              `float gPatch1 = sin( vGrassWorld.x * 0.095 + vGrassWorld.y * 0.062 ) * cos( vGrassWorld.y * 0.088 - vGrassWorld.x * 0.041 );
+              float gPatch2 = sin( vGrassWorld.x * 0.23 - vGrassWorld.y * 0.19 ) * 0.5;
+              outgoingLight *= ( 1.0 + gPatch1 * 0.11 + gPatch2 * 0.055 );
+              gl_FragColor = vec4( outgoingLight, diffuseColor.a );`
+            );
+        }
+      };
+      material.customProgramCacheKey = () => cacheKey;
+    }
+    return material;
+  }
+  function applyCharacterShader(material, rimUniforms) {
+    if (!material) return material;
+    material.userData = { ...(material.userData || {}), worldBent: true, hasRim: true };
+    material.onBeforeCompile = shader => {
+      shader.uniforms.uWorldBend = worldBendUniform;
+      shader.uniforms.uBendViewMat = bendViewMatUniform;
+      shader.uniforms.uRimColor = rimUniforms.color;
+      shader.uniforms.uRimStrength = rimUniforms.strength;
+      shader.uniforms.uRimPower = rimUniforms.power;
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          'void main() {',
+          'uniform vec2 uWorldBend;\nuniform mat4 uBendViewMat;\nvarying vec3 vRimNormal;\nvarying vec3 vRimViewDir;\nvoid main() {'
+        )
+        .replace(
+          '#include <project_vertex>',
+          `vec4 mvPosition = vec4( transformed, 1.0 );
+          #ifdef USE_INSTANCING
+            mvPosition = instanceMatrix * mvPosition;
+          #endif
+          vec4 bendWorldPos = modelMatrix * mvPosition;
+          float bendDist = max( 0.0, -bendWorldPos.z );
+          float bendDist2 = bendDist * bendDist;
+          mvPosition = modelViewMatrix * mvPosition;
+          mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+          vRimNormal = normalize( transformedNormal );
+          vRimViewDir = normalize( -mvPosition.xyz );
+          gl_Position = projectionMatrix * mvPosition;`
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          'void main() {',
+          'uniform vec3 uRimColor;\nuniform float uRimStrength;\nuniform float uRimPower;\nvarying vec3 vRimNormal;\nvarying vec3 vRimViewDir;\nvoid main() {'
+        )
+        .replace(
+          'gl_FragColor = vec4( outgoingLight, diffuseColor.a );',
+          `vec3 rimN = normalize( vRimNormal );
+          #ifdef DOUBLE_SIDED
+            rimN = rimN * ( float( gl_FrontFacing ) * 2.0 - 1.0 );
+          #endif
+          float rimNdotV = clamp( dot( rimN, normalize( vRimViewDir ) ), 0.0, 1.0 );
+          float rimFresnel = pow( 1.0 - rimNdotV, uRimPower );
+          float rimTopBias = smoothstep( -0.35, 0.55, rimN.y ) * 0.45 + 0.55;
+          outgoingLight += uRimColor * ( rimFresnel * rimTopBias * uRimStrength );
+          gl_FragColor = vec4( outgoingLight, diffuseColor.a );`
+        );
+    };
+    material.customProgramCacheKey = () => 'char-bend-rim';
+    return material;
+  }
+
+  const T = (color) => applyWorldBend(new THREE.MeshToonMaterial({ color, gradientMap: toonGrad() }));
+  const L = (color) => applyWorldBend(new THREE.MeshLambertMaterial({ color }));
+  const P = (color, shininess = 30, emissive = 0x000000) => applyWorldBend(new THREE.MeshPhongMaterial({ color, shininess, specular: 0x3a3a3a, emissive }));
+  const Basic = (color) => applyWorldBend(new THREE.MeshBasicMaterial({ color }));
 
   function mesh(geo, mat, x = 0, y = 0, z = 0, shadow = true) {
     const m = new THREE.Mesh(geo, mat);
@@ -41,7 +192,7 @@ const Models = (() => {
   const obstacleKit = new Map();
   let thanosAsset = null;
   function preparePaintedAsset(source) {
-    const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const material = applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true }));
     const paint = new THREE.Color();
     source.traverse(node => {
       if (!node.isMesh) return;
@@ -58,9 +209,18 @@ const Models = (() => {
       node.userData.sharedAsset = true;
     });
   }
+  const WIND_STREET_PARTS = new Set([
+    'PlaneTree', 'PlaneTreeFar', 'BlossomTree', 'BlossomTreeFar',
+    'ParkPoplar', 'ParkPoplarFar', 'MarketBunting',
+  ]);
   function installStreetKit(source) {
     preparePaintedAsset(source);
-    source.traverse(node => { if (node.isMesh) streetKit.set(node.name, node); });
+    const windMat = applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true }), { wind: true, windAmp: 1.0 });
+    source.traverse(node => {
+      if (!node.isMesh) return;
+      if (WIND_STREET_PARTS.has(node.name)) node.material = windMat;
+      streetKit.set(node.name, node);
+    });
   }
   function recolorTruckYellow(node, isLong) {
     const attr = node.geometry.getAttribute('color');
@@ -222,9 +382,77 @@ const Models = (() => {
       geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
       geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-      root.add(new THREE.Mesh(geometry, new Material({ vertexColors: true })));
+      root.add(new THREE.Mesh(geometry, applyWorldBend(new Material({ vertexColors: true }))));
     }
     return root;
+  }
+
+  let shadowTextures = null;
+  const unitShadowGeo = new THREE.PlaneGeometry(1, 1);
+  function getShadowTextures() {
+    if (shadowTextures) return shadowTextures;
+    // 软边圆角矩形接触阴影（货车与条状障碍）
+    const rc = document.createElement('canvas');
+    rc.width = rc.height = 64;
+    const rctx = rc.getContext('2d');
+    const rg = rctx.createRadialGradient(32, 32, 8, 32, 32, 31);
+    rg.addColorStop(0, 'rgba(18,26,36,0.68)');
+    rg.addColorStop(0.55, 'rgba(18,26,36,0.52)');
+    rg.addColorStop(0.84, 'rgba(18,26,36,0.18)');
+    rg.addColorStop(1, 'rgba(18,26,36,0)');
+    rctx.fillStyle = rg;
+    rctx.fillRect(0, 0, 64, 64);
+    // 额外加一层柔和矩形核，让长货车底盘四周阴影更规整贴合
+    rctx.fillStyle = 'rgba(16,24,34,0.34)';
+    rctx.beginPath();
+    const pad = 11, rad = 10;
+    rctx.moveTo(pad + rad, pad);
+    rctx.arcTo(64 - pad, pad, 64 - pad, 64 - pad, rad);
+    rctx.arcTo(64 - pad, 64 - pad, pad, 64 - pad, rad);
+    rctx.arcTo(pad, 64 - pad, pad, pad, rad);
+    rctx.arcTo(pad, pad, 64 - pad, pad, rad);
+    rctx.closePath();
+    rctx.fill();
+    const rectMap = new THREE.CanvasTexture(rc);
+
+    // 柔和圆形接触阴影（灭霸、行道树等）
+    const cc = document.createElement('canvas');
+    cc.width = cc.height = 64;
+    const cctx = cc.getContext('2d');
+    const cg = cctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+    for (const [stop, alpha] of [[0, 0.56], [0.38, 0.42], [0.72, 0.16], [1, 0]]) {
+      cg.addColorStop(stop, `rgba(22,32,42,${alpha})`);
+    }
+    cctx.fillStyle = cg;
+    cctx.fillRect(0, 0, 64, 64);
+    const roundMap = new THREE.CanvasTexture(cc);
+
+    shadowTextures = { rectMap, roundMap, mats: new Map() };
+    return shadowTextures;
+  }
+  function makeContactShadow(kind, w, d, z = 0, opacity = 0.72, y = 0.034, x = 0) {
+    const st = getShadowTextures();
+    const key = `${kind}|${opacity.toFixed(2)}`;
+    let mat = st.mats.get(key);
+    if (!mat) {
+      mat = applyWorldBend(new THREE.MeshBasicMaterial({
+        map: kind === 'rect' ? st.rectMap : st.roundMap,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }));
+      st.mats.set(key, mat);
+    }
+    const m = new THREE.Mesh(unitShadowGeo, mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(x, y, z);
+    m.scale.set(w, d, 1);
+    m.userData.sharedAsset = true;
+    m.userData.contactShadow = true;
+    return m;
   }
 
   function characterShadows() {
@@ -239,9 +467,9 @@ const Models = (() => {
     ctx.fillRect(0, 0, 64, 64);
     const map = new THREE.CanvasTexture(canvas);
     const geometry = new THREE.PlaneGeometry(1, 1);
-    return [0, 1].map(() => new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    return [0, 1].map(() => new THREE.Mesh(geometry, applyWorldBend(new THREE.MeshBasicMaterial({
       map, transparent: true, depthWrite: false,
-    })));
+    }))));
   }
 
   // 同一段文字只画一次画布，Sprite 之间共享贴图，减少跑图时的 canvas 绘制和显存上涨。
@@ -267,7 +495,7 @@ const Models = (() => {
     return tex;
   }
   function label(text, bg = '#fff6e3', fg = '#3a2b20', w = 2.0) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(text, bg, fg), transparent: true, depthTest: true }));
+    const sp = new THREE.Sprite(applyWorldBend(new THREE.SpriteMaterial({ map: labelTexture(text, bg, fg), transparent: true, depthTest: true })));
     sp.scale.set(w, w * 96 / 256, 1);
     sp.userData.sharedAsset = true; // 贴图是共享缓存，回收时不要 dispose
     return sp;
@@ -287,7 +515,7 @@ const Models = (() => {
     yelGrad.addColorStop(0.72, '#ffd93f');
     yelGrad.addColorStop(1, '#f5c81f');
     yelCtx.fillStyle = yelGrad; yelCtx.fillRect(0, 0, 8, 256);
-    const YELMAT = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(yelCv) });
+    const YELMAT = applyWorldBend(new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(yelCv) }));
 
     const torso = new THREE.Group();
     torso.position.y = 0.55;
@@ -310,7 +538,7 @@ const Models = (() => {
     // 绿眼大黑瞳（头部正面，两眼较近）
     for (const s of [-1, 1]) {
       torso.add(mesh(sph(0.12, 20, 16), P(GREEN, 50), s * 0.13, 1.30, -0.28));
-      const pup = mesh(sph(0.085, 16, 12), new THREE.MeshPhongMaterial({ color: 0x0a0a0a, shininess: 90, specular: 0x999999 }), s * 0.13, 1.30, -0.375, false);
+      const pup = mesh(sph(0.085, 16, 12), applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x0a0a0a, shininess: 90, specular: 0x999999 })), s * 0.13, 1.30, -0.375, false);
       torso.add(pup);
     }
     // 细微笑嘴
@@ -357,7 +585,7 @@ const Models = (() => {
       color.toArray(colors, i * 3);
     }
     shell.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    eggG.add(mesh(shell, new THREE.MeshBasicMaterial({ vertexColors: true }), 0, 0, 0));
+    eggG.add(mesh(shell, applyWorldBend(new THREE.MeshBasicMaterial({ vertexColors: true })), 0, 0, 0));
     eggG.visible = false;
     g.add(eggG);
 
@@ -376,7 +604,7 @@ const Models = (() => {
       mesh(box(0.05, 0.26, 0.18), rCol(0xffcf3f), -0.18, -0.18, 0, false),      // 左尾翼
       mesh(box(0.18, 0.26, 0.05), rCol(0xffcf3f), 0, -0.18, 0.18, false),       // 后尾翼
     ];
-    const rocketBody = mergeStatic(rocketParts, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGrad() }), { vertexColors: true });
+    const rocketBody = mergeStatic(rocketParts, applyWorldBend(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGrad() })), { vertexColors: true });
     for (const p of rocketParts) p.geometry.dispose();
     rocketPivot.add(rocketBody);
     const auraFlames = [];
@@ -396,8 +624,184 @@ const Models = (() => {
     for (const ch of [...g.children]) { ch.position.y -= 1.0; spin.add(ch); }
     g.add(spin);
 
-    g.userData = { body, belly, arms, legs, torso, egg: eggG, aura, auraFlames, spin };
+    const fallbackCosmetics = naiwaCosmetics(false);
+    torso.add(fallbackCosmetics.headMount, fallbackCosmetics.chestMount);
+
+    g.userData = { body, belly, arms, legs, torso, egg: eggG, aura, auraFlames, spin, fallbackCosmetics };
     return g;
+  }
+
+  let passBadgeTex = null;
+  function getPassBadgeTexture() {
+    if (passBadgeTex) return passBadgeTex;
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 256;
+    const c = cv.getContext('2d');
+    const bg = c.createLinearGradient(0, 0, 0, 256);
+    bg.addColorStop(0, '#ffe885');
+    bg.addColorStop(0.5, '#f5b82e');
+    bg.addColorStop(1, '#c97f12');
+    c.fillStyle = bg;
+    c.fillRect(0, 0, 256, 256);
+
+    c.lineWidth = 14;
+    c.strokeStyle = '#5c2d0c';
+    c.strokeRect(14, 14, 228, 228);
+
+    c.fillStyle = '#9e2323';
+    c.fillRect(28, 28, 200, 200);
+
+    c.lineWidth = 6;
+    c.strokeStyle = '#ffd95e';
+    c.strokeRect(38, 38, 180, 180);
+
+    c.fillStyle = '#ffe999';
+    c.font = 'bold 42px "ZCOOL KuaiLe","Microsoft YaHei",sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('免交', 128, 96);
+    c.fillText('作业', 128, 148);
+
+    c.fillStyle = '#ffd447';
+    c.font = 'bold 22px "Microsoft YaHei",sans-serif';
+    c.fillText('★ 特权金牌 ★', 128, 198);
+
+    passBadgeTex = new THREE.CanvasTexture(cv);
+    passBadgeTex.anisotropy = 4;
+    return passBadgeTex;
+  }
+
+  /* ---------- 商店 3D 潮酷装扮模型（街溜子墨镜 / 遥遥领先小皇冠 / 免交作业金牌） ---------- */
+  function naiwaCosmetics(forRig = true) {
+    const grad = toonGrad();
+    const goldMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xffcf38, emissive: 0x332100, gradientMap: grad }));
+    const brightGoldMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xffe878, emissive: 0x3a2800, gradientMap: grad }));
+    const darkFrameMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0x1a1e24, emissive: 0x080a0d, gradientMap: grad }));
+    const lensMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x0d121a, shininess: 120, specular: 0xffffff }));
+    const glintMat = Basic(0xa8f0ff);
+    const rubyMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0xff2e55, emissive: 0x380612, shininess: 100, specular: 0xffffff }));
+    const emeraldMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x2ee89c, emissive: 0x053320, shininess: 100, specular: 0xffffff }));
+    const sapphireMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x38b6ff, emissive: 0x062338, shininess: 100, specular: 0xffffff }));
+    const velvetMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xc92a3d, emissive: 0x26050a, gradientMap: grad }));
+
+    const headMount = new THREE.Group();
+    const chestMount = new THREE.Group();
+
+    if (forRig) {
+      // Head / Chest 骨骼在 Pelvis (-90° X) 下，绕 X 转 +90° 后恢复标准 (+X右, +Y上, +Z面朝前)
+      headMount.rotation.x = Math.PI / 2;
+      chestMount.rotation.x = Math.PI / 2;
+    } else {
+      // 备用程序化模型朝向 -Z，缩放约 0.64
+      headMount.position.set(0, 0.98, 0);
+      headMount.rotation.y = Math.PI;
+      headMount.scale.setScalar(0.64);
+      chestMount.position.set(0, 0.56, 0);
+      chestMount.rotation.y = Math.PI;
+      chestMount.scale.setScalar(0.64);
+    }
+
+    // 1. 🕶️ 街溜子墨镜
+    const glasses = new THREE.Group();
+    glasses.position.set(0, 0.485, 0.555);
+    // 金色顶梁与鼻托横梁
+    glasses.add(mesh(box(0.76, 0.042, 0.045), goldMat, 0, 0.095, 0.02, false));
+    glasses.add(mesh(box(0.14, 0.036, 0.042), goldMat, 0, 0.02, 0.025, false));
+    for (const s of [-1, 1]) {
+      const lx = s * 0.21;
+      // 粗黑镜框 + 金色边角铆钉
+      glasses.add(mesh(box(0.28, 0.19, 0.042), darkFrameMat, lx, 0, 0, false));
+      glasses.add(mesh(box(0.235, 0.145, 0.048), lensMat, lx, 0, 0.006, false));
+      glasses.add(mesh(box(0.045, 0.022, 0.05), goldMat, lx + s * 0.115, 0.062, 0.008, false));
+      // 镜片斜向高光条
+      const glint = mesh(box(0.035, 0.12, 0.052), glintMat, lx - s * 0.045, 0.005, 0.01, false);
+      glint.rotation.z = -0.38;
+      glasses.add(glint);
+      // 两侧镜腿向耳后延伸
+      const temple = mesh(box(0.034, 0.038, 0.38), darkFrameMat, s * 0.355, 0.035, -0.17, false);
+      glasses.add(temple);
+      glasses.add(mesh(box(0.038, 0.042, 0.12), goldMat, s * 0.355, 0.035, -0.02, false));
+    }
+    glasses.visible = false;
+    headMount.add(glasses);
+
+    // 2. 👑 遥遥领先小皇冠
+    const crown = new THREE.Group();
+    crown.position.set(0, 0.705, 0.195);
+    crown.rotation.x = 0.08; // 微向前倾，正面和背面视角都饱满立体
+    // 内衬红丝绒顶与纯金底座环
+    const dome = mesh(sph(0.215, 16, 12), velvetMat, 0, 0.08, 0, false);
+    dome.scale.set(1, 0.78, 1);
+    crown.add(dome);
+    crown.add(mesh(cyl(0.255, 0.225, 0.14, 16), goldMat, 0, 0.07, 0, false));
+    const lowerRim = mesh(new THREE.TorusGeometry(0.23, 0.024, 8, 20), brightGoldMat, 0, 0.005, 0, false);
+    lowerRim.rotation.x = Math.PI / 2;
+    crown.add(lowerRim);
+    const upperRim = mesh(new THREE.TorusGeometry(0.252, 0.02, 8, 20), brightGoldMat, 0, 0.135, 0, false);
+    upperRim.rotation.x = Math.PI / 2;
+    crown.add(upperRim);
+    // 6 根皇冠金尖刺 + 顶珠 + 环绕宝石
+    const spikes = 6;
+    const gemMats = [rubyMat, emeraldMat, sapphireMat, rubyMat, emeraldMat, sapphireMat];
+    for (let i = 0; i < spikes; i++) {
+      const a = (i / spikes) * Math.PI * 2;
+      const sx = Math.sin(a), sz = Math.cos(a);
+      const spike = mesh(cyl(0.008, 0.068, 0.17, 8), goldMat, sx * 0.24, 0.21, sz * 0.24, false);
+      spike.rotation.x = sz * 0.14;
+      spike.rotation.z = -sx * 0.14;
+      crown.add(spike);
+      crown.add(mesh(sph(0.036, 10, 8), brightGoldMat, sx * 0.258, 0.30, sz * 0.258, false));
+      const gem = mesh(sph(0.036, 10, 8), gemMats[i], sx * 0.248, 0.072, sz * 0.248, false);
+      gem.scale.set(1.1, 1.25, 0.65);
+      crown.add(gem);
+    }
+    crown.visible = false;
+    headMount.add(crown);
+
+    // 3. 📘 免交作业金牌（背部大金牌 + 胸前金绶带徽章，首页正面与跑酷背面皆清晰可见）
+    const pass = new THREE.Group();
+    const badgeFaceMat = applyWorldBend(new THREE.MeshBasicMaterial({ map: getPassBadgeTexture() }));
+    // 背部主金牌（跑酷时正对镜头）
+    const backPlaque = new THREE.Group();
+    backPlaque.position.set(0, 0.14, -0.69);
+    backPlaque.add(mesh(box(0.56, 0.64, 0.06), goldMat, 0, 0, 0, false));
+    backPlaque.add(mesh(box(0.62, 0.07, 0.08), brightGoldMat, 0, 0.31, 0, false));
+    backPlaque.add(mesh(box(0.62, 0.07, 0.08), brightGoldMat, 0, -0.31, 0, false));
+    const backFace = mesh(new THREE.PlaneGeometry(0.48, 0.54), badgeFaceMat, 0, 0, -0.034, false);
+    backFace.rotation.y = Math.PI;
+    backPlaque.add(backFace);
+    // 顶部红金挂环与两侧飘带流苏
+    const topRing = mesh(new THREE.TorusGeometry(0.075, 0.02, 8, 16), brightGoldMat, 0, 0.38, 0, false);
+    backPlaque.add(topRing);
+    for (const s of [-1, 1]) {
+      const tassel = mesh(box(0.07, 0.26, 0.03), velvetMat, s * 0.24, -0.42, 0, false);
+      tassel.rotation.z = s * 0.12;
+      backPlaque.add(tassel);
+      backPlaque.add(mesh(box(0.08, 0.05, 0.036), brightGoldMat, s * 0.255, -0.54, 0, false));
+    }
+    pass.add(backPlaque);
+
+    // 胸前斜挎金红礼仪绶带 + 胸前特权小金牌（首页待机正面直视可见）
+    const frontMedal = new THREE.Group();
+    frontMedal.position.set(0, 0.26, 0.545);
+    frontMedal.add(mesh(box(0.28, 0.32, 0.045), goldMat, 0, 0, 0, false));
+    const frontFace = mesh(new THREE.PlaneGeometry(0.23, 0.26), badgeFaceMat, 0, 0, 0.025, false);
+    frontMedal.add(frontFace);
+    frontMedal.add(mesh(sph(0.032, 10, 8), rubyMat, 0, 0.16, 0.02, false));
+    pass.add(frontMedal);
+
+    pass.visible = false;
+    chestMount.add(pass);
+
+    return {
+      headMount,
+      chestMount,
+      setSkins({ glasses: gOn = false, crown: cOn = false, pass: pOn = false } = {}) {
+        glasses.visible = !!gOn;
+        crown.visible = !!cOn;
+        pass.visible = !!pOn;
+      },
+    };
   }
 
   /* ---------- 大众化热梗障碍 ---------- */
@@ -460,7 +864,7 @@ const Models = (() => {
       d.beginPath();
       d.arc(96, 96, 8, 0, Math.PI * 2);
       d.fill();
-      alarmFaceMaterial = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(dial) });
+      alarmFaceMaterial = applyWorldBend(new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(dial) }));
 
       const stripes = document.createElement('canvas');
       stripes.width = 256; stripes.height = 64;
@@ -473,7 +877,7 @@ const Models = (() => {
         s.lineTo(x + 70, 0); s.lineTo(x + 39, 0);
         s.fill();
       }
-      alarmStripeMaterial = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(stripes) });
+      alarmStripeMaterial = applyWorldBend(new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(stripes) }));
     }
 
     const g = new THREE.Group();
@@ -492,11 +896,59 @@ const Models = (() => {
     g.add(mesh(new THREE.CircleGeometry(0.342, 28), alarmFaceMaterial, 0, 0.57, 0.177, false));
     const warning = label('跳过闹钟', '#982d27', '#fff3d9', 1.89);
     warning.position.set(0, 1.42, 0.17);
-    g.add(warning);
+    g.add(warning, makeContactShadow('rect', 2.25, 1.35, 0, 0.68));
     return g;
   }
 
+  const obstacleShadowSpec = {
+    alarm: ['rect', 2.25, 1.35, 0, 0.68],
+    gang: ['rect', 1.95, 1.05, 0, 0.62],
+    bing: ['rect', 2.55, 1.05, 0, 0.56],
+    emo: ['rect', 1.85, 1.15, 0, 0.66],
+    phone: ['rect', 1.95, 1.15, 0, 0.66],
+    thanos: ['round', 1.95, 1.75, 0.05, 0.68],
+  };
+
+  let gauntletGlowTex = null, phoneHeartTex = null;
+  function getGauntletGlowTexture() {
+    if (gauntletGlowTex) return gauntletGlowTex;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const c = cv.getContext('2d');
+    const g = c.createRadialGradient(32, 32, 2, 32, 32, 31);
+    g.addColorStop(0, 'rgba(255,252,215,1)');
+    g.addColorStop(0.28, 'rgba(255,204,78,0.85)');
+    g.addColorStop(0.62, 'rgba(186,105,255,0.38)');
+    g.addColorStop(1, 'rgba(186,105,255,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 64, 64);
+    c.strokeStyle = 'rgba(255,248,210,0.9)';
+    c.lineWidth = 2.4;
+    c.beginPath(); c.moveTo(32, 6); c.lineTo(32, 58); c.moveTo(6, 32); c.lineTo(58, 32); c.stroke();
+    gauntletGlowTex = new THREE.CanvasTexture(cv);
+    return gauntletGlowTex;
+  }
+  function getPhoneHeartTexture() {
+    if (phoneHeartTex) return phoneHeartTex;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#ff5e96';
+    c.beginPath();
+    c.moveTo(32, 52);
+    c.bezierCurveTo(10, 38, 8, 18, 22, 14);
+    c.bezierCurveTo(28, 12, 32, 18, 32, 21);
+    c.bezierCurveTo(32, 18, 36, 12, 42, 14);
+    c.bezierCurveTo(56, 18, 54, 38, 32, 52);
+    c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.55)';
+    c.beginPath(); c.arc(23, 24, 4, 0, Math.PI * 2); c.fill();
+    phoneHeartTex = new THREE.CanvasTexture(cv);
+    return phoneHeartTex;
+  }
+
   function obstacle(type) {
+    const shSpec = obstacleShadowSpec[type] || obstacleShadowSpec.phone;
     const look = obstacleLooks[type];
     const painted = look && obstaclePart(look[0]);
     if (painted) {
@@ -504,11 +956,22 @@ const Models = (() => {
       const [, caption, bg, fg, width, y] = look;
       const sign = label(caption, bg, fg, width);
       sign.position.set(0, y, 0.22);
-      g.add(painted, sign);
+      g.add(painted, sign, makeContactShadow(...shSpec));
+      if (type === 'phone') {
+        const heart = new THREE.Sprite(applyWorldBend(new THREE.SpriteMaterial({
+          map: getPhoneHeartTexture(), transparent: true, opacity: 0.9, depthWrite: false,
+        })));
+        heart.position.set(0.38, 1.55, 0.28);
+        heart.scale.set(0.36, 0.36, 1);
+        heart.userData.sharedAsset = true;
+        g.add(heart);
+        g.userData.phoneHeart = heart;
+      }
       return g;
     }
     if (type === 'alarm') return alarmObstacle();
     const g = new THREE.Group();
+    g.add(makeContactShadow(...shSpec));
     if (type === 'gang') {
       for (const s of [-1, 1]) g.add(mesh(box(0.1, 0.85, 0.1), T(0xc9c2d8), s * 0.5, 0.42, 0));
       for (let i = 0; i < 5; i++)
@@ -533,7 +996,15 @@ const Models = (() => {
       }
       const lb = label('灭霸', '#eadcfa', '#462f68', 1.23);
       lb.position.set(0, 2.48, 0.12);
-      g.add(lb);
+      const glow = new THREE.Sprite(applyWorldBend(new THREE.SpriteMaterial({
+        map: getGauntletGlowTexture(), transparent: true, opacity: 0.85,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      })));
+      glow.position.set(0.65, 1.36, 0.54);
+      glow.scale.set(0.75, 0.75, 1);
+      glow.userData.sharedAsset = true;
+      g.add(lb, glow);
+      g.userData.gauntletGlow = glow;
     } else if (type === 'emo') {
       g.add(mesh(box(1.2, 2.2, 0.3), T(0x4a3b6b), 0, 1.1, 0));
       g.add(mesh(box(1.28, 2.28, 0.06), T(0x6b5a94), 0, 1.1, 0.13, false));
@@ -669,9 +1140,9 @@ const Models = (() => {
         [0.001, -0.32], [0.16, -0.32], [0.225, -0.27], [0.245, -0.15],
         [0.215, 0.01], [0.23, 0.14], [0.195, 0.21], [0.145, 0.26], [0.001, 0.26],
       ].map(([r, y]) => new THREE.Vector2(r, y));
-      const bodyMat = new THREE.MeshToonMaterial({
+      const bodyMat = applyWorldBend(new THREE.MeshToonMaterial({
         map: milkBottleTexture(), color: 0xffffff, emissive: 0x24221e, gradientMap: grad,
-      });
+      }));
       coinProto.add(mesh(new THREE.LatheGeometry(bodyPts, 12), bodyMat, 0, 0, 0, false));
 
       // 2 & 3. 草莓粉螺旋瓶盖 + 白色锁边环 + 暖金硅胶奶嘴头，合并为 1 个顶点色网格降低 draw call
@@ -690,7 +1161,7 @@ const Models = (() => {
         torusPart,
         mesh(new THREE.LatheGeometry(nipplePts, 10), nippleMat, 0, 0, 0, false),
       ];
-      const topMat = new THREE.MeshToonMaterial({ vertexColors: true, emissive: 0x221210, gradientMap: grad });
+      const topMat = applyWorldBend(new THREE.MeshToonMaterial({ vertexColors: true, emissive: 0x221210, gradientMap: grad }));
       coinProto.add(mergeStatic(topParts, topMat, { vertexColors: true }));
       for (const p of topParts) p.geometry.dispose();
 
@@ -701,7 +1172,7 @@ const Models = (() => {
         [0.198, 0.358], [0.140, 0.384], [0.088, 0.44], [0.095, 0.486],
         [0.068, 0.528], [0.001, 0.542],
       ].map(([r, y]) => new THREE.Vector2(r, y));
-      const outlineMat = new THREE.MeshBasicMaterial({ color: 0x33241a, side: THREE.BackSide });
+      const outlineMat = applyWorldBend(new THREE.MeshBasicMaterial({ color: 0x33241a, side: THREE.BackSide }));
       coinProto.add(mesh(new THREE.LatheGeometry(outlinePts, 12), outlineMat, 0, 0, 0, false));
 
       coinProto.rotation.z = -0.32;
@@ -782,9 +1253,9 @@ const Models = (() => {
         [0.001, -0.32], [0.30, -0.32], [0.35, -0.29], [0.335, -0.24],
         [0.335, 0.20], [0.36, 0.23], [0.365, 0.30], [0.34, 0.33], [0.001, 0.33],
       ].map(([r, y]) => new THREE.Vector2(r, y));
-      const canMat = new THREE.MeshToonMaterial({
+      const canMat = applyWorldBend(new THREE.MeshToonMaterial({
         map: milkPowderTexture(), color: 0xffffff, emissive: 0x262014, gradientMap: grad,
-      });
+      }));
       powderProto.add(mesh(new THREE.LatheGeometry(canPts, 14), canMat, 0, 0, 0, false));
 
       // 深棕卡通描边，确保在蓝天白云中轮廓鲜明
@@ -792,7 +1263,7 @@ const Models = (() => {
         [0.001, -0.352], [0.325, -0.350], [0.382, -0.305], [0.368, -0.24],
         [0.368, 0.20], [0.392, 0.23], [0.396, 0.315], [0.362, 0.362], [0.001, 0.366],
       ].map(([r, y]) => new THREE.Vector2(r, y));
-      const outMat = new THREE.MeshBasicMaterial({ color: 0x33241a, side: THREE.BackSide });
+      const outMat = applyWorldBend(new THREE.MeshBasicMaterial({ color: 0x33241a, side: THREE.BackSide }));
       powderProto.add(mesh(new THREE.LatheGeometry(outPts, 14), outMat, 0, 0, 0, false));
 
       powderProto.rotation.z = -0.18;
@@ -837,14 +1308,14 @@ const Models = (() => {
       beaconTextures.floor = new THREE.CanvasTexture(floorCanvas);
     }
     const marker = new THREE.Group();
-    const beam = new THREE.Sprite(new THREE.SpriteMaterial({
+    const beam = new THREE.Sprite(applyWorldBend(new THREE.SpriteMaterial({
       map: beaconTextures.beam, color, transparent: true, depthWrite: false, opacity: 0.88,
-    }));
+    })));
     beam.scale.set(0.96, 3.72, 1);
     beam.position.y = beam.scale.y / 2;
-    const floor = new THREE.Mesh(beaconFloor, new THREE.MeshBasicMaterial({
+    const floor = new THREE.Mesh(beaconFloor, applyWorldBend(new THREE.MeshBasicMaterial({
       map: beaconTextures.floor, color, transparent: true, depthWrite: false,
-    }));
+    })));
     floor.rotation.x = -Math.PI / 2;
     marker.add(floor, beam);
     return marker;
@@ -904,7 +1375,7 @@ const Models = (() => {
           parts.push(mesh(cyl(0.054, 0.06, 0.08, 8), hoofCol, lx, -0.37, lz, false));
         }
       }
-      const sheepMat = new THREE.MeshToonMaterial({ vertexColors: true, emissive: 0x261f08, gradientMap: toonGrad() });
+      const sheepMat = applyWorldBend(new THREE.MeshToonMaterial({ vertexColors: true, emissive: 0x261f08, gradientMap: toonGrad() }));
       sheepProto = mergeStatic(parts, sheepMat, { vertexColors: true });
       for (const p of parts) p.geometry.dispose();
       sheepProto.userData.sharedAsset = true;
@@ -1017,6 +1488,8 @@ const Models = (() => {
     const lb = label(long ? '奶娃物流 · 加长' : '奶娃物流', '#fff6e3', '#3a2b20', 1.9);
     lb.position.set(0, 2.95, -(half - 0.8)); g.add(lb);
     g.userData.sign = lb;
+    // 车底接触阴影（低成本增强货车在沥青路面上的重量感）
+    g.add(makeContactShadow('rect', 2.68, len + cabLength + 0.65, -cabLength * 0.5, 0.78));
     if (withRamp) {
       const paintedRamp = obstaclePart('TruckRamp');
       if (paintedRamp) {
@@ -1032,9 +1505,61 @@ const Models = (() => {
         for (const t of [-1.2, 0, 1.2]) ramp.add(mesh(box(rampWidth, 0.02, 0.3), T(0x2a2f38), 0, 0.07, t, false));
         g.add(ramp);
       }
+      g.add(makeContactShadow('rect', rampWidth + 0.55, rampLength + 0.5, half + rampLength * 0.5, 0.52));
       const tip = label('斜坡↑', '#fff6d9', '#a8861f', 1.2); tip.position.set(0, 1.0, half + 2.8); g.add(tip);
       g.userData.rampSign = tip;
     }
+    return g;
+  }
+
+  /* ---------- 5000米狂暴模式专属：迎面驶来的动态货车（车头朝向玩家 + 大灯光锥预警） ---------- */
+  const beamGeo = new THREE.ConeGeometry(0.68, 4.6, 12, 1, true);
+  function oncomingTruck(color = 0xf6c536) {
+    const g = new THREE.Group();
+    const { shortHalf, roofHeight, cabLength } = truckGeometry;
+    const inner = new THREE.Group();
+    inner.rotation.y = Math.PI; // 车头转向 +Z（迎面冲向玩家）
+    const body = obstaclePart('TruckShort');
+    if (body) {
+      inner.add(body);
+    } else {
+      const len = shortHalf * 2;
+      inner.add(mesh(box(1.7, 0.35, len - 0.2), T(0x2a2f38), 0, 0.72, 0));
+      inner.add(mesh(box(1.9, 1.6, len), T(color), 0, 1.4, 0));
+      inner.add(mesh(box(2.0, 0.12, len + 0.1), L(0xe3b12c), 0, roofHeight - 0.06, 0));
+      inner.add(mesh(box(1.9, 1.8, cabLength), T(0xe0a122), 0, roofHeight - 0.9, -(shortHalf + cabLength / 2)));
+      inner.add(mesh(box(1.7, 0.7, 0.1), Basic(0xbfe6ff), 0, 1.9, -(shortHalf + cabLength + 0.02)));
+    }
+    g.add(inner);
+
+    // 迎面大灯高亮灯珠 + 向前扫射的暖黄光锥（位于世界 +Z 车头前方）
+    const frontZ = shortHalf + cabLength + 0.05;
+    const beamMat = applyWorldBend(new THREE.MeshBasicMaterial({
+      color: 0xffe88a, transparent: true, opacity: 0.28,
+      depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    }));
+    const orbs = [];
+    for (const s of [-1, 1]) {
+      const orb = mesh(sph(0.20, 10, 8), Basic(0xfff8c4), s * 0.68, 0.84, frontZ, false);
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      beam.position.set(s * 0.68, 0.68, frontZ + 2.35);
+      beam.rotation.x = -Math.PI / 2 + 0.08;
+      beam.userData.sharedAsset = true;
+      g.add(orb, beam);
+      orbs.push(orb);
+    }
+    // 车顶红橙预警爆闪灯条
+    const strobeMat = applyWorldBend(new THREE.MeshBasicMaterial({ color: 0xff4c3b }));
+    const strobe = mesh(box(0.85, 0.18, 0.24), strobeMat, 0, roofHeight + 0.12, shortHalf + 0.55, false);
+    g.add(strobe, makeContactShadow('rect', 2.68, shortHalf * 2 + cabLength + 0.65, cabLength * 0.5, 0.8));
+
+    const lb = label('⚠️ 来车!', '#e83f35', '#fff8d6', 2.0);
+    lb.position.set(0, 3.12, shortHalf + 0.55);
+    g.add(lb);
+    g.userData.sign = lb;
+    g.userData.headlightMat = beamMat;
+    g.userData.strobeMat = strobeMat;
+    g.userData.headlightOrbs = orbs;
     return g;
   }
 
@@ -1078,7 +1603,7 @@ const Models = (() => {
       ctx.fillText(text, 128, 34, 232);
       const map = new THREE.CanvasTexture(canvas);
       map.anisotropy = 4;
-      signMaterials.set(text, new THREE.MeshBasicMaterial({ map, alphaTest: 0.22 }));
+      signMaterials.set(text, applyWorldBend(new THREE.MeshBasicMaterial({ map, alphaTest: 0.22 })));
     }
     const sign = mesh(signGeometry, signMaterials.get(text), x, y, z, false);
     sign.scale.set(width, height, 1);
@@ -1105,7 +1630,7 @@ const Models = (() => {
   const bladeMaterials = new Map();
   const bladeFrameGeos = {};
   let bladeFacesGeo = null;
-  const bladeFrameMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  const bladeFrameMat = applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true }));
   const apronMats = { campus: L(0xb8ad98), market: L(0xc3b49b) };
   const apronGeos = new Map();
 
@@ -1130,7 +1655,7 @@ const Models = (() => {
       ctx.fillText(text, 128, 58, 214);
       const map = new THREE.CanvasTexture(cv);
       map.anisotropy = 4;
-      bladeMaterials.set(key, new THREE.MeshBasicMaterial({ map }));
+      bladeMaterials.set(key, applyWorldBend(new THREE.MeshBasicMaterial({ map })));
     }
     if (!bladeFrameGeos[theme]) {
       const ironCol = { color: new THREE.Color(0x2d434a) };
@@ -1211,7 +1736,7 @@ const Models = (() => {
     c.fillStyle = 'rgba(58,43,32,.12)'; c.fillRect(0, 430, 256, 82);
     const tex = new THREE.CanvasTexture(cv);
     tex.anisotropy = 4;
-    g.add(mesh(box(w, h, w), new THREE.MeshLambertMaterial({ map: tex }), 0, h / 2, 0, false));
+    g.add(mesh(box(w, h, w), applyWorldBend(new THREE.MeshLambertMaterial({ map: tex })), 0, h / 2, 0, false));
     // 屋檐、屋顶设备与水箱，打破所有楼都只有方盒子的轮廓
     g.add(mesh(box(w * 1.1, 0.28, w * 1.1), L(0x625570), 0, h + 0.14, 0, false));
     g.add(mesh(box(w * 0.42, 0.65, w * 0.38), L(0xe7e1d8), -w * 0.2, h + 0.58, 0, false));
@@ -1265,7 +1790,7 @@ const Models = (() => {
 
       clockDialProto = new THREE.Group();
       const bronze = { color: new THREE.Color(0x866547) }, gold = { color: new THREE.Color(0xc4a370) };
-      const faceMat = new THREE.MeshBasicMaterial({ map });
+      const faceMat = applyWorldBend(new THREE.MeshBasicMaterial({ map }));
       const outerGeo = cyl(0.84, 0.84, 0.12, 20);
       const bezelGeo = cyl(0.75, 0.75, 0.15, 20);
       const faceGeo = new THREE.CircleGeometry(0.67, 20);
@@ -1281,13 +1806,63 @@ const Models = (() => {
         faceParts.push(dial);
       }
       clockDialProto.add(
-        mergeStatic(ringParts, new THREE.MeshLambertMaterial({ vertexColors: true }), { vertexColors: true }),
+        mergeStatic(ringParts, applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true })), { vertexColors: true }),
         mergeStatic(faceParts, faceMat, { withUV: true })
       );
       outerGeo.dispose(); bezelGeo.dispose(); faceGeo.dispose();
       clockDialProto.traverse(n => { n.userData.sharedAsset = true; });
     }
     return clockDialProto.clone(true);
+  }
+
+  let pondShimmerGeo = null, pondShimmerMat = null;
+  function getPondShimmer() {
+    if (!pondShimmerGeo) {
+      pondShimmerGeo = new THREE.PlaneGeometry(8.5, 12.8, 6, 8);
+      pondShimmerGeo.rotateX(-Math.PI / 2);
+      pondShimmerMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: {
+          uTime: windTimeUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uTime;
+          varying vec2 vUv;
+          void main() {
+            vec2 p = vUv * 2.0 - 1.0;
+            float r = length( p );
+            float mask = smoothstep( 0.96, 0.56, r );
+            if ( mask <= 0.004 ) discard;
+            float w1 = sin( p.x * 13.0 + uTime * 2.1 + sin( p.y * 9.0 - uTime * 1.4 ) );
+            float w2 = cos( p.y * 16.0 - uTime * 2.5 + cos( p.x * 11.0 + uTime * 1.3 ) );
+            float caustic = smoothstep( 0.42, 0.95, 0.5 + 0.5 * w1 * w2 );
+            float glint = pow( max( 0.0, w1 * w2 ), 5.0 );
+            vec3 col = mix( vec3( 0.68, 0.92, 0.88 ), vec3( 1.0, 0.98, 0.86 ), glint );
+            float alpha = ( caustic * 0.24 + glint * 0.42 ) * mask;
+            gl_FragColor = vec4( col, alpha );
+          }`,
+      });
+    }
+    const m = new THREE.Mesh(pondShimmerGeo, pondShimmerMat);
+    m.position.y = 0.159;
+    m.userData.sharedAsset = true;
+    return m;
   }
 
   function landmark(name, text) {
@@ -1307,6 +1882,9 @@ const Models = (() => {
         streetSign(text, 3.0, 0.39, 0, 2.56, 1.78),
         forecourtApron(6.3, 1.4, 2.45, 'market')
       );
+    }
+    if (name === 'ParkPond') {
+      group.add(getPondShimmer());
     }
     if (name === 'ParkPond' || name === 'ParkWalk') group.userData.sceneryTail = 8;
     return group;
@@ -1346,7 +1924,7 @@ const Models = (() => {
         }
       }
       // 合并为 1 个顶点色网格，每条窄巷仅占 1 次 draw call
-      const merged = mergeStatic(parts, new THREE.MeshLambertMaterial({ vertexColors: true }), { vertexColors: true });
+      const merged = mergeStatic(parts, applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true })), { vertexColors: true });
       for (const p of parts) p.geometry.dispose();
       merged.userData.sharedAsset = true;
       alleyProtos[zone] = merged;
@@ -1365,8 +1943,13 @@ const Models = (() => {
   function tree(blossom = false) {
     const asset = streetPart(blossom ? 'BlossomTree' : 'PlaneTree');
     if (asset) {
-      asset.userData.streetShadow = true;
-      return asset;
+      const group = new THREE.Group();
+      const shadow = makeContactShadow('round', 3.7, 3.3, 0.2, 0.48, -0.015, 0.25);
+      // 保持 asset 位于 children[0]，确保 setStreetDetail 远近 LOD 正常切换
+      group.add(asset, shadow);
+      group.userData.farHide = [shadow];
+      group.userData.streetShadow = true;
+      return group;
     }
     const g = new THREE.Group();
     g.add(mesh(cyl(0.12, 0.19, 1.7, 8), L(0x8a6248), 0, 0.85, 0, false));
@@ -1377,13 +1960,18 @@ const Models = (() => {
       crown.rotation.set(i * 0.3, i * 0.7, 0); g.add(crown);
     });
     g.add(mesh(cyl(0.65, 0.72, 0.16, 12), L(0xd7c3a4), 0, 0.08, 0, false));
+    g.add(makeContactShadow('round', 3.4, 3.0, 0.18, 0.44, -0.015, 0.2));
     return g;
   }
   function parkTree() {
     const asset = streetPart('ParkPoplar');
     if (!asset) return tree(false);
-    asset.userData.streetShadow = true;
-    return asset;
+    const group = new THREE.Group();
+    const shadow = makeContactShadow('round', 4.0, 3.6, 0.22, 0.44, 0.018, 0.28);
+    group.add(asset, shadow);
+    group.userData.farHide = [shadow];
+    group.userData.streetShadow = true;
+    return group;
   }
   function flowerBed() {
     const asset = streetPart('FlowerPlanter');
@@ -1421,7 +2009,7 @@ const Models = (() => {
     const g = new THREE.Group();
     for (const s of [-1, 1]) g.add(mesh(box(0.1, 2.5, 0.1), L(0x40506a), s * 1.55, 1.25, 0, false));
     g.add(mesh(box(3.5, 0.18, 1.55), L(0x5ec8f2), 0, 2.5, 0, false));
-    const glass = new THREE.MeshPhongMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.35, shininess: 80 });
+    const glass = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.35, shininess: 80 }));
     g.add(mesh(box(3.1, 2.1, 0.05), glass, 0, 1.25, -0.58, false));
     const b = bench(); b.scale.setScalar(0.85); b.position.set(0, 0, -0.3); g.add(b);
     const lb = label('奶娃站', '#ffd93f', '#3a2b20', 1.45); lb.position.set(-0.85, 2.95, 0); g.add(lb);
@@ -1459,7 +2047,7 @@ const Models = (() => {
       for (const sz of [-1.95, 1.95]) {
         parts.push(mesh(stopGeo, paint, 0, 0, sz, false));
       }
-      crosswalkProto = mergeStatic(parts, new THREE.MeshBasicMaterial({ vertexColors: true }), { vertexColors: true });
+      crosswalkProto = mergeStatic(parts, applyWorldBend(new THREE.MeshBasicMaterial({ vertexColors: true })), { vertexColors: true });
       stripeGeo.dispose(); stopGeo.dispose();
       crosswalkProto.userData.sharedAsset = true;
     }
@@ -1482,12 +2070,12 @@ const Models = (() => {
     const steel = L(0x314d55);
     const steelLight = L(0x466872);
     const gold = L(0xd6ae62);
-    const glassRoofMat = new THREE.MeshLambertMaterial({
+    const glassRoofMat = applyWorldBend(new THREE.MeshLambertMaterial({
       color: 0xbce5ef, transparent: true, opacity: 0.44, side: THREE.DoubleSide, depthWrite: false,
-    });
-    const glassRailMat = new THREE.MeshLambertMaterial({
+    }));
+    const glassRailMat = applyWorldBend(new THREE.MeshLambertMaterial({
       color: 0x99cedb, transparent: true, opacity: 0.34, side: THREE.DoubleSide, depthWrite: false,
-    });
+    }));
 
     // 1. 主桥墩（立于左右人行道内侧 x = ±4.65，避开三车道与路桩）
     const baseGeo = box(0.86, 0.38, 1.85);
@@ -1645,7 +2233,7 @@ const Models = (() => {
       else solidParts.push(child);
       g.remove(child);
     }
-    const solidMesh = mergeStatic(solidParts, new THREE.MeshLambertMaterial({ vertexColors: true }), { vertexColors: true });
+    const solidMesh = mergeStatic(solidParts, applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true })), { vertexColors: true });
     const railGlassMesh = mergeStatic(glassRailParts, glassRailMat);
     const tempGeos = new Set([...solidParts, ...glassRailParts].map(p => p.geometry));
     for (const geo of tempGeos) geo.dispose();
@@ -1671,8 +2259,112 @@ const Models = (() => {
     g.userData.sceneryTail = 4;
     return g;
   }
+  let fountainFxProto = null;
+  function getFountainWaterFx() {
+    if (!fountainFxProto) {
+      fountainFxProto = new THREE.Group();
+      // 水池同心扩散涟漪
+      const rippleGeo = new THREE.CircleGeometry(1.12, 24);
+      rippleGeo.rotateX(-Math.PI / 2);
+      const rippleMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: {
+          uTime: windTimeUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uTime;
+          varying vec2 vUv;
+          void main() {
+            float r = length( vUv * 2.0 - 1.0 );
+            if ( r > 1.0 || r < 0.22 ) discard;
+            float ring1 = smoothstep( 0.09, 0.0, abs( fract( r * 2.6 - uTime * 0.72 ) - 0.5 ) );
+            float splashRing = smoothstep( 0.12, 0.0, abs( r - 0.69 ) ) * ( 0.6 + 0.4 * sin( uTime * 6.0 + vUv.x * 18.0 ) );
+            float fade = smoothstep( 1.0, 0.78, r ) * smoothstep( 0.22, 0.34, r );
+            float alpha = ( ring1 * 0.36 + splashRing * 0.48 ) * fade;
+            if ( alpha <= 0.005 ) discard;
+            gl_FragColor = vec4( vec3( 0.90, 0.98, 1.0 ), alpha );
+          }`,
+      });
+      const ripple = new THREE.Mesh(rippleGeo, rippleMat);
+      ripple.position.y = 0.342;
+      fountainFxProto.add(ripple);
+
+      // 喷泉顶部十字交叉水花薄雾
+      const p1 = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.74), null);
+      const p2 = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.74), null);
+      p2.rotation.y = Math.PI / 2;
+      const plumeGeo = mergeStatic([p1, p2], null, { withUV: true }).geometry;
+      p1.geometry.dispose(); p2.geometry.dispose();
+      const plumeMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        uniforms: {
+          uTime: windTimeUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uTime;
+          varying vec2 vUv;
+          void main() {
+            float dx = abs( vUv.x - 0.5 ) * 2.0;
+            float y = vUv.y;
+            float arch = smoothstep( 0.0, 0.45, y ) * smoothstep( 1.0, 0.52, y );
+            float spread = mix( 0.25, 0.95, y );
+            float core = smoothstep( spread, 0.0, dx );
+            float drops = 0.55 + 0.45 * sin( y * 24.0 - uTime * 11.0 + dx * 8.0 );
+            float alpha = core * arch * drops * 0.62;
+            if ( alpha <= 0.01 ) discard;
+            gl_FragColor = vec4( vec3( 0.88, 0.98, 1.0 ), alpha );
+          }`,
+      });
+      const plume = new THREE.Mesh(plumeGeo, plumeMat);
+      plume.position.y = 1.44;
+      fountainFxProto.add(plume);
+      fountainFxProto.traverse(n => { n.userData.sharedAsset = true; });
+    }
+    return fountainFxProto.clone(true);
+  }
   function fountain() {
-    return streetPart('ParkFountain') || mesh(cyl(1.24, 1.3, 0.28, 18).translate(0, 0.14, 0), L(0xb3b4a1), 0, 0, 0, false);
+    const asset = streetPart('ParkFountain');
+    if (asset) {
+      const group = new THREE.Group();
+      const fx = getFountainWaterFx();
+      group.add(asset, fx);
+      group.userData.farHide = [fx];
+      return group;
+    }
+    return mesh(cyl(1.24, 1.3, 0.28, 18).translate(0, 0.14, 0), L(0xb3b4a1), 0, 0, 0, false);
   }
   function garden() { return streetPart('ParkGarden') || flowerBed(); }
   function hedge() { return mesh(box(0.5, 0.6, 8), L(0x5aa84f), 0, 0.3, 0, false); }
@@ -1711,6 +2403,161 @@ const Models = (() => {
       cloudMap = new THREE.CanvasTexture(canvas);
     }
     return new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudMap, depthWrite: false, fog: false }));
+  }
+
+  /* ---------- 火箭高空飞行专用：左右建筑上方 3D 蓬松云团 + 无死角云海柔雾层 ---------- */
+  function skyCloudCorridor() {
+    const root = new THREE.Group();
+    root.visible = false;
+
+    // 1. 左右无死角云海柔雾底毯（内侧在建筑屋顶 x=±7.2~11.2m 处柔和羽化，外侧 100% 遮住绿色大空地）
+    const blanketCv = document.createElement('canvas');
+    blanketCv.width = 256;
+    blanketCv.height = 256;
+    const bc = blanketCv.getContext('2d');
+    for (let x = 0; x < 256; x++) {
+      // u: 0 为贴近街道屋顶内缘，1 为远方外侧天际
+      const u = x / 255;
+      const baseAlpha = THREE.MathUtils.smoothstep(u, 0.0, 0.11);
+      for (let y = 0; y < 256; y++) {
+        const v = y / 256;
+        const wave = 0.5 + 0.3 * Math.sin(v * Math.PI * 6 + u * 8) + 0.2 * Math.cos(v * Math.PI * 10 - u * 5);
+        const edgeFeather = THREE.MathUtils.smoothstep(u + (wave - 0.5) * 0.035, 0.01, 0.11);
+        const a = Math.min(1, Math.max(baseAlpha, edgeFeather));
+        const shade = 0.92 + 0.08 * wave;
+        const r = Math.round(255 * shade);
+        const g = Math.round(245 * shade);
+        const b = Math.round(225 * shade);
+        bc.fillStyle = `rgba(${r},${g},${b},${a.toFixed(3)})`;
+        bc.fillRect(x, y, 1, 1);
+      }
+    }
+    const blanketTex = new THREE.CanvasTexture(blanketCv);
+    blanketTex.wrapS = THREE.ClampToEdgeWrapping;
+    blanketTex.wrapT = THREE.RepeatWrapping;
+    blanketTex.repeat.set(1, 6);
+
+    const blanketMat = applyWorldBend(new THREE.MeshBasicMaterial({
+      map: blanketTex,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }));
+
+    const innerX = 7.0;
+    const outerX = 280;
+    const widthX = outerX - innerX;
+    for (const side of [-1, 1]) {
+      const geo = new THREE.PlaneGeometry(widthX, 280, 4, 48);
+      // 让 u=0 始终朝向街道中心 (|x| = innerX)，u=1 朝向外侧远方 (|x| = outerX)
+      if (side < 0) {
+        const uv = geo.attributes.uv;
+        for (let i = 0; i < uv.count; i++) {
+          uv.setX(i, 1 - uv.getX(i));
+        }
+      }
+      const plane = new THREE.Mesh(geo, blanketMat);
+      plane.rotation.x = -Math.PI / 2;
+      plane.position.set(side * (innerX + widthX / 2), 6.15, -75);
+      plane.renderOrder = 1;
+      root.add(plane);
+    }
+
+    // 2. 3D 蓬松立体卡通云朵群（烘焙顶点明暗色，合并为单网格循环滚动）
+    const LOOP_LEN = 120;
+    const puffParts = [];
+    const puffGeo = new THREE.SphereGeometry(1, 12, 9);
+    const topCol = new THREE.Color(0xfffaf0);
+    const midCol = new THREE.Color(0xf7ebd6);
+    const botCol = new THREE.Color(0xdfd3be);
+    const tmpCol = new THREE.Color();
+
+    function makePuff(x, y, z, rx, ry, rz, tint = 1) {
+      const g = puffGeo.clone();
+      const pos = g.attributes.position;
+      const colors = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        const py = pos.getY(i);
+        // 底部略微压平，顶部饱满圆润
+        if (py < 0) pos.setY(i, py * 0.58);
+        const h = THREE.MathUtils.clamp((py + 0.6) / 1.6, 0, 1);
+        if (h > 0.45) tmpCol.copy(midCol).lerp(topCol, (h - 0.45) / 0.55);
+        else tmpCol.copy(botCol).lerp(midCol, h / 0.45);
+        tmpCol.multiplyScalar(tint);
+        tmpCol.toArray(colors, i * 3);
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      g.scale(rx, ry, rz);
+      g.translate(x, y, z);
+      const m = new THREE.Mesh(g, Basic(0xffffff));
+      puffParts.push(m);
+    }
+
+    // 固定随机种子生成对称又自然的云团簇，首尾在 LOOP_LEN 处无缝衔接
+    const steps = 15;
+    const stepZ = LOOP_LEN / steps;
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < steps; i++) {
+        const z0 = -i * stepZ;
+        const phase = i * 1.7 + (side > 0 ? 0.9 : 2.3);
+        const s1 = Math.sin(phase), c1 = Math.cos(phase * 1.3);
+
+        // 内排：紧贴左右建筑屋顶上方 (|x| ≈ 9.2 ~ 15.5m, y ≈ 6.3 ~ 9.2m)
+        const ix = side * (10.2 + (s1 * 0.5 + 0.5) * 2.2);
+        const iy = 6.55 + (c1 * 0.5 + 0.5) * 0.75;
+        makePuff(ix, iy, z0, 3.4, 1.85, 3.6, 1.0);
+        makePuff(ix + side * 2.1, iy + 0.55, z0 - 1.4, 2.8, 2.1, 2.9, 1.02);
+        makePuff(ix - side * 1.3, iy - 0.15, z0 + 1.5, 2.3, 1.45, 2.5, 0.98);
+
+        // 中排：层叠饱满大云朵 (|x| ≈ 16 ~ 27m, y ≈ 7.2 ~ 11.2m)
+        const mx = side * (18.5 + (c1 * 0.5 + 0.5) * 4.5);
+        const my = 7.4 + (s1 * 0.5 + 0.5) * 1.1;
+        makePuff(mx, my, z0 - 2.0, 5.2, 2.6, 4.8, 1.01);
+        makePuff(mx + side * 3.2, my + 0.8, z0 + 0.6, 4.4, 2.9, 4.2, 1.03);
+
+        // 外排：远方高耸云岭 (|x| ≈ 30 ~ 52m, y ≈ 8.0 ~ 13.0m)，彻底封死侧向远景地面视线
+        const ox = side * (33.5 + ((i % 3) * 5.2));
+        const oy = 8.2 + ((i % 2) * 1.1);
+        makePuff(ox, oy, z0 - 1.0, 8.5, 3.6, 6.8, 1.0);
+      }
+    }
+
+    const puffMat = applyWorldBend(new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+    }));
+    const beltMeshA = mergeStatic(puffParts, puffMat, { vertexColors: true });
+    for (const p of puffParts) p.geometry.dispose();
+    puffGeo.dispose();
+    const beltMeshB = beltMeshA.clone();
+    beltMeshA.renderOrder = 2;
+    beltMeshB.renderOrder = 2;
+    root.add(beltMeshA, beltMeshB);
+
+    root.traverse(n => { n.userData.sharedAsset = true; });
+
+    return {
+      root,
+      update(blend, distance) {
+        const b = THREE.MathUtils.clamp(blend, 0, 1);
+        if (b <= 0.004) {
+          root.visible = false;
+          return;
+        }
+        root.visible = true;
+        blanketMat.opacity = b;
+        puffMat.opacity = b;
+        // 升空时云海从上方轻盈托起，沉浸感更强
+        root.position.y = (1 - b) * 1.6;
+        // 云团以柔和视差随飞行距离向后掠过，两段 120m 云带无缝循环覆盖 z ∈ [-175, +65]
+        const scroll = (distance * 0.65) % LOOP_LEN;
+        beltMeshA.position.z = scroll;
+        beltMeshB.position.z = scroll - LOOP_LEN;
+        blanketTex.offset.y = (distance * 0.65) / 140;
+      },
+    };
   }
   function sidewalkTexture() {
     const cv = document.createElement('canvas');
@@ -1798,7 +2645,7 @@ const Models = (() => {
       const x = Math.sin(a) * radius, z = -Math.cos(a) * radius;
       const valley = 0.42 + 0.58 * Math.abs(Math.sin(a * 1.5));
       const ridge = 0.58 + 0.22 * Math.sin(a * 7 + phase) + 0.14 * Math.sin(a * 13 + 1.2 + phase);
-      points.push(x, -3, z, x, 4 + height * ridge * valley, z);
+      points.push(x, -50, z, x, 4 + height * ridge * valley, z);
       if (i < steps) indices.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
     }
     const geometry = new THREE.BufferGeometry();
@@ -1840,8 +2687,827 @@ const Models = (() => {
     return g;
   }
 
-  return { naiwa, doubaoFallback, obstacle, truck, truckGeometry, markTruckJump, memeBall, coin, milkPowder, power, building, tree,
+  /* ---------- 菲涅尔六边形能量光盾（相信光盾） ---------- */
+  function shieldDome() {
+    const root = new THREE.Group();
+    root.position.y = 1.02;
+    const domeMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uImpact: { value: 0 },
+        uStacks: { value: 1 },
+        uCoreColor: { value: new THREE.Color(0xfff0a3) },
+        uEdgeColor: { value: new THREE.Color(0x69f0ff) },
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+        varying vec3 vLocalPos;
+        void main() {
+          vLocalPos = position;
+          vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+          vNormal = normalize( normalMatrix * normal );
+          vViewDir = normalize( -mvPosition.xyz );
+          gl_Position = projectionMatrix * mvPosition;
+        }`,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uImpact;
+        uniform float uStacks;
+        uniform vec3 uCoreColor;
+        uniform vec3 uEdgeColor;
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+        varying vec3 vLocalPos;
+
+        float hexDist( vec2 p ) {
+          p = abs( p );
+          return max( dot( p, normalize( vec2( 1.0, 1.7320508 ) ) ), p.x );
+        }
+
+        float hexEdge( vec2 uv ) {
+          vec2 r = vec2( 1.0, 1.7320508 );
+          vec2 h = r * 0.5;
+          vec2 a = mod( uv, r ) - h;
+          vec2 b = mod( uv - h, r ) - h;
+          vec2 gv = dot( a, a ) < dot( b, b ) ? a : b;
+          float d = 0.5 - hexDist( gv );
+          return smoothstep( 0.085, 0.015, d );
+        }
+
+        void main() {
+          vec3 N = normalize( vNormal );
+          vec3 V = normalize( vViewDir );
+          float ndotv = clamp( dot( N, V ), 0.0, 1.0 );
+          float fresnel = pow( 1.0 - ndotv, 2.15 );
+
+          vec3 dir = normalize( vLocalPos );
+          float lon = atan( dir.x, dir.z );
+          vec2 hexUv = vec2( lon * 2.55, dir.y * 4.4 - uTime * 0.35 );
+          float hex = hexEdge( hexUv );
+
+          float scan = pow( 0.5 + 0.5 * sin( dir.y * 6.5 - uTime * 4.2 ), 6.0 );
+          float pulse = 0.86 + 0.14 * sin( uTime * 3.2 );
+          float stackBoost = min( 1.0, max( 0.0, uStacks - 1.0 ) * 0.5 );
+
+          vec3 col = mix( uCoreColor, uEdgeColor, clamp( fresnel * 0.82 + scan * 0.35 + stackBoost * 0.28, 0.0, 1.0 ) );
+          col += vec3( 1.0, 0.98, 0.88 ) * ( hex * ( 0.24 + scan * 0.45 + fresnel * 0.44 ) + uImpact * 0.95 );
+
+          float alpha = fresnel * 0.72 * pulse
+            + hex * ( 0.06 + fresnel * 0.34 + scan * 0.22 )
+            + scan * 0.10
+            + uImpact * ( 0.34 + hex * 0.36 );
+          gl_FragColor = vec4( col, clamp( alpha, 0.0, 0.92 ) );
+        }`,
+    });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(1.38, 28, 20), domeMat);
+    dome.renderOrder = 12;
+    root.add(dome);
+
+    const ringGeo = new THREE.TorusGeometry(1.44, 0.026, 8, 48);
+    const ringMat1 = new THREE.MeshBasicMaterial({
+      color: 0xffe97a, transparent: true, opacity: 0.62, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const ring1 = new THREE.Mesh(ringGeo, ringMat1);
+    ring1.rotation.set(Math.PI / 2 + 0.38, 0, 0.24);
+    ring1.renderOrder = 13;
+    root.add(ring1);
+
+    const ringMat2 = new THREE.MeshBasicMaterial({
+      color: 0x73f0ff, transparent: true, opacity: 0.72, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const ring2 = new THREE.Mesh(ringGeo, ringMat2);
+    ring2.scale.setScalar(1.04);
+    ring2.rotation.set(Math.PI / 2 - 0.46, 0.25, -0.32);
+    ring2.visible = false;
+    ring2.renderOrder = 13;
+    root.add(ring2);
+
+    return {
+      root,
+      update(t, stacks = 1, impact = 0) {
+        domeMat.uniforms.uTime.value = t;
+        domeMat.uniforms.uStacks.value = stacks;
+        domeMat.uniforms.uImpact.value = impact;
+        const sc = 1 + Math.sin(t * 3.6) * 0.018 + impact * 0.14;
+        dome.scale.setScalar(sc);
+        ring1.rotation.z = t * 1.45;
+        ringMat1.opacity = (stacks >= 2 ? 0.78 : 0.52) + impact * 0.35;
+        ring2.visible = stacks >= 2;
+        if (ring2.visible) {
+          ring2.rotation.z = -t * 1.9;
+          ringMat2.opacity = (stacks >= 3 ? 0.88 : 0.68) + impact * 0.25;
+        }
+      },
+    };
+  }
+
+  /* ---------- 3D 空间速度线通道（挂于相机本地坐标，1 次 Draw Call） ---------- */
+  function speedLines() {
+    const geo = new THREE.CylinderGeometry(5.2, 0.88, 10.5, 48, 1, true);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uIntensity: { value: 0 },
+        uColor: { value: new THREE.Color(0xfff4d4) },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+        }`,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uIntensity;
+        uniform vec3 uColor;
+        varying vec2 vUv;
+
+        float hash11( float p ) {
+          return fract( sin( p * 127.1 + 311.7 ) * 43758.5453123 );
+        }
+
+        void main() {
+          if ( uIntensity <= 0.005 ) discard;
+          float lanes = 46.0;
+          float id = floor( vUv.x * lanes );
+          float cellX = fract( vUv.x * lanes ) - 0.5;
+
+          float rnd = hash11( id );
+          float rnd2 = hash11( id + 19.3 );
+          float speed = 2.6 + rnd * 2.8;
+          float width = 0.055 + rnd2 * 0.065;
+          float lineX = smoothstep( width, 0.0, abs( cellX ) );
+
+          float streak = fract( vUv.y * ( 1.45 + rnd * 1.1 ) + uTime * speed + rnd2 * 10.0 );
+          float tail = smoothstep( 0.0, 0.14, streak ) * smoothstep( 0.72, 0.14, streak );
+
+          // 随速度强度动态点亮更多线条，低速稀疏、高速密集
+          float gate = step( 1.0 - clamp( uIntensity * 1.15, 0.15, 0.95 ), rnd );
+          float depthFade = smoothstep( 0.04, 0.24, vUv.y ) * smoothstep( 0.98, 0.42, vUv.y );
+
+          float alpha = lineX * tail * gate * depthFade * uIntensity * 0.56;
+          if ( alpha <= 0.004 ) discard;
+          gl_FragColor = vec4( uColor, alpha );
+        }`,
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(0, 0, -5.6);
+    m.frustumCulled = false;
+    m.renderOrder = 999;
+    m.visible = false;
+    return {
+      mesh: m,
+      update(t, intensity, colorHex, aspect = 1.5) {
+        const clamped = THREE.MathUtils.clamp(intensity, 0, 1);
+        m.visible = clamped > 0.01;
+        if (!m.visible) return;
+        mat.uniforms.uTime.value = t;
+        mat.uniforms.uIntensity.value = clamped;
+        mat.uniforms.uColor.value.setHex(colorHex);
+        // 适配宽屏与竖屏手机，保持画面中心跑道视野始终清爽无遮挡
+        m.scale.set(THREE.MathUtils.clamp(aspect * 0.72, 0.62, 1.38), 1, 1);
+      },
+    };
+  }
+
+  /* ---------- GPU 多形态粒子系统（1 次 Draw Call，支持曲面世界 + 4 种程序化形态） ---------- */
+  function particleSystem(maxCount = 200) {
+    const positions = new Float32Array(maxCount * 3);
+    const colors = new Float32Array(maxCount * 3);
+    const sizes = new Float32Array(maxCount);
+    const alphas = new Float32Array(maxCount);
+    const shapes = new Float32Array(maxCount);
+
+    const geo = new THREE.BufferGeometry();
+    const posAttr = new THREE.BufferAttribute(positions, 3);
+    const colAttr = new THREE.BufferAttribute(colors, 3);
+    const sizeAttr = new THREE.BufferAttribute(sizes, 1);
+    const alphaAttr = new THREE.BufferAttribute(alphas, 1);
+    const shapeAttr = new THREE.BufferAttribute(shapes, 1);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    colAttr.setUsage(THREE.DynamicDrawUsage);
+    sizeAttr.setUsage(THREE.DynamicDrawUsage);
+    alphaAttr.setUsage(THREE.DynamicDrawUsage);
+    shapeAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', posAttr);
+    geo.setAttribute('aColor', colAttr);
+    geo.setAttribute('aSize', sizeAttr);
+    geo.setAttribute('aAlpha', alphaAttr);
+    geo.setAttribute('aShape', shapeAttr);
+    geo.setDrawRange(0, 0);
+
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uScale: { value: 400 },
+        uWorldBend: worldBendUniform,
+        uBendViewMat: bendViewMatUniform,
+      },
+      vertexShader: `
+        attribute vec3 aColor;
+        attribute float aSize;
+        attribute float aAlpha;
+        attribute float aShape;
+        uniform float uScale;
+        uniform vec2 uWorldBend;
+        uniform mat4 uBendViewMat;
+        varying vec3 vColor;
+        varying float vAlpha;
+        varying float vShape;
+        void main() {
+          vColor = aColor;
+          vAlpha = aAlpha;
+          vShape = aShape;
+          vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+          float bendDist = max( 0.0, -bendWorldPos.z );
+          float bendDist2 = bendDist * bendDist;
+          vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+          mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+          gl_Position = projectionMatrix * mvPosition;
+          gl_PointSize = clamp( aSize * uScale / max( 1.2, -mvPosition.z ), 1.5, 92.0 );
+        }`,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+        varying float vShape;
+        void main() {
+          if ( vAlpha <= 0.005 ) discard;
+          vec2 p = gl_PointCoord * 2.0 - 1.0;
+          float r = length( p );
+          if ( r > 1.0 ) discard;
+          vec3 col = vColor;
+          float a = 0.0;
+          if ( vShape < 0.5 ) {
+            // 0: 蓬松烟尘 / 云团
+            float puff = smoothstep( 1.0, 0.12, r );
+            float hi = smoothstep( 0.72, 0.0, length( p + vec2( 0.25, 0.25 ) ) ) * 0.18;
+            col = min( vec3( 1.0 ), col + vec3( hi ) );
+            a = puff * puff * 0.85;
+          } else if ( vShape < 1.5 ) {
+            // 1: 卡通四角星芒（奶瓶/奶粉/金牌收集）
+            float crossStar = exp( -abs( p.x ) * 6.2 ) * exp( -abs( p.y ) * 1.65 )
+                            + exp( -abs( p.y ) * 6.2 ) * exp( -abs( p.x ) * 1.65 );
+            float core = smoothstep( 0.55, 0.0, r );
+            col = mix( col, vec3( 1.0, 0.99, 0.92 ), clamp( core * 0.75 + crossStar * 0.35, 0.0, 1.0 ) );
+            a = clamp( crossStar * 0.95 + core * 0.65, 0.0, 1.0 ) * smoothstep( 1.0, 0.72, r );
+          } else if ( vShape < 2.5 ) {
+            // 2: 脆亮水滴 / 撞击光珠
+            float orb = smoothstep( 0.98, 0.62, r );
+            float spec = smoothstep( 0.34, 0.05, length( p + vec2( 0.28, 0.28 ) ) );
+            col = mix( col, vec3( 1.0 ), spec * 0.7 );
+            a = orb;
+          } else {
+            // 3: 炽热火星 / 尾焰余烬
+            float glow = smoothstep( 1.0, 0.0, r );
+            float hot = smoothstep( 0.52, 0.0, r );
+            col = mix( col, vec3( 1.0, 0.97, 0.82 ), hot * 0.85 );
+            a = pow( glow, 1.35 );
+          }
+          float finalA = a * vAlpha;
+          if ( finalA <= 0.008 ) discard;
+          gl_FragColor = vec4( col, finalA );
+        }`,
+    });
+
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.renderOrder = 18;
+
+    const list = [];
+    const tmpCol = new THREE.Color();
+    let hadLive = false;
+
+    function emit(x, y, z, vx, vy, vz, colorHex, size = 0.24, life = 0.55, shape = 2, gravity = 18, drag = 0, grow = 0, roadScroll = 0) {
+      tmpCol.set(colorHex);
+      const item = {
+        x, y, z, vx, vy, vz,
+        r: tmpCol.r, g: tmpCol.g, b: tmpCol.b,
+        size, life, max: Math.max(0.05, life),
+        shape, gravity, drag, grow, roadScroll,
+      };
+      if (list.length < maxCount) list.push(item);
+      else list[Math.floor(Math.random() * maxCount)] = item;
+    }
+
+    function burst(x, y, z, colorHex, n = 10, spd = 8, shape = 2, size = 0.24, lifeMax = 0.65, gravity = 18, roadScroll = 0) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const hSpd = spd * (0.3 + Math.random() * 0.7);
+        const vy = 1.6 + Math.random() * Math.max(2.2, spd * 0.85);
+        const life = lifeMax * (0.48 + Math.random() * 0.52);
+        emit(
+          x, y, z,
+          Math.cos(a) * hSpd, vy, Math.sin(a) * hSpd,
+          colorHex, size * (0.78 + Math.random() * 0.45),
+          life, shape, gravity, shape === 0 ? 1.8 : 0.4,
+          shape === 0 ? 0.55 : -0.35, roadScroll
+        );
+      }
+    }
+
+    function update(dt, viewportHeight = 720, scrollDz = 0) {
+      mat.uniforms.uScale.value = Math.max(280, viewportHeight * 0.56);
+      let live = 0;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        p.life -= dt;
+        if (p.life <= 0) continue;
+        if (p.drag > 0) {
+          const damp = Math.exp(-p.drag * dt);
+          p.vx *= damp; p.vy *= damp; p.vz *= damp;
+        }
+        p.vy -= p.gravity * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.z += p.vz * dt + scrollDz * p.roadScroll;
+        const u = 1 - p.life / p.max;
+        const curSize = Math.max(0.03, p.size * (1 + p.grow * u));
+        const alpha = u < 0.12 ? (u / 0.12) : Math.pow(Math.max(0, 1 - u), p.shape < 0.5 ? 1.25 : 0.9);
+        const o3 = live * 3;
+        positions[o3] = p.x;
+        positions[o3 + 1] = p.y;
+        positions[o3 + 2] = p.z;
+        colors[o3] = p.r;
+        colors[o3 + 1] = p.g;
+        colors[o3 + 2] = p.b;
+        sizes[live] = curSize;
+        alphas[live] = alpha;
+        shapes[live] = p.shape;
+        list[live] = p;
+        live++;
+      }
+      list.length = live;
+      geo.setDrawRange(0, live);
+      if (live > 0 || hadLive) {
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
+        sizeAttr.needsUpdate = true;
+        alphaAttr.needsUpdate = true;
+        shapeAttr.needsUpdate = true;
+      }
+      hadLive = live > 0;
+    }
+
+    function clear() {
+      list.length = 0;
+      geo.setDrawRange(0, 0);
+      hadLive = false;
+    }
+
+    return { points, emit, burst, update, clear };
+  }
+
+  /* ---------- 落地 / 肘飞 冲击波圆环池（复用几何，贴合路面与车顶） ---------- */
+  function landingRings(count = 6) {
+    const root = new THREE.Group();
+    const ringGeo = new THREE.RingGeometry(0.42, 0.72, 24);
+    ringGeo.rotateX(-Math.PI / 2);
+    const slots = [];
+    for (let i = 0; i < count; i++) {
+      const mat = applyWorldBend(new THREE.MeshBasicMaterial({
+        color: 0xfff4d6,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }));
+      const m = new THREE.Mesh(ringGeo, mat);
+      m.visible = false;
+      m.renderOrder = 15;
+      root.add(m);
+      slots.push({ mesh: m, mat, age: 0, dur: 0.34, maxScale: 1.8, active: false });
+    }
+    let cursor = 0;
+    function spawn(x, y, z = 0, colorHex = 0xfff3d4, maxScale = 1.85, duration = 0.34) {
+      const s = slots[cursor];
+      cursor = (cursor + 1) % slots.length;
+      s.active = true;
+      s.age = 0;
+      s.dur = duration;
+      s.maxScale = maxScale;
+      s.mat.color.setHex(colorHex);
+      s.mat.opacity = 0.78;
+      s.mesh.position.set(x, y + 0.045, z);
+      s.mesh.scale.setScalar(0.35);
+      s.mesh.visible = true;
+    }
+    function update(dt, scrollDz = 0) {
+      for (const s of slots) {
+        if (!s.active) continue;
+        s.age += dt;
+        if (s.age >= s.dur) {
+          s.active = false;
+          s.mesh.visible = false;
+          continue;
+        }
+        const u = s.age / s.dur;
+        const ease = 1 - (1 - u) * (1 - u) * (1 - u);
+        s.mesh.position.z += scrollDz;
+        s.mesh.scale.setScalar(0.35 + (s.maxScale - 0.35) * ease);
+        s.mat.opacity = (1 - u) * (1 - u) * 0.75;
+      }
+    }
+    function clear() {
+      for (const s of slots) { s.active = false; s.mesh.visible = false; }
+    }
+    return { root, spawn, update, clear };
+  }
+
+  /* ---------- 3D 动态丝带拖尾（闪身步 / 奶蛋翻滚 / 火箭高飞，1 次 Draw Call） ---------- */
+  function ribbonTrail(segments = 14) {
+    const verts = (segments + 1) * 2;
+    const positions = new Float32Array(verts * 3);
+    const uvs = new Float32Array(verts * 2);
+    const alphas = new Float32Array(verts);
+    const indices = [];
+    for (let i = 0; i <= segments; i++) {
+      const v = i / segments;
+      uvs[i * 4] = 0; uvs[i * 4 + 1] = v;
+      uvs[i * 4 + 2] = 1; uvs[i * 4 + 3] = v;
+      if (i < segments) {
+        const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+        indices.push(a, b, c, b, d, c);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    const posAttr = new THREE.BufferAttribute(positions, 3);
+    const alphaAttr = new THREE.BufferAttribute(alphas, 1);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    alphaAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', posAttr);
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setAttribute('aAlpha', alphaAttr);
+    geo.setIndex(indices);
+
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uColor: { value: new THREE.Color(0x82ebff) },
+        uWorldBend: worldBendUniform,
+        uBendViewMat: bendViewMatUniform,
+      },
+      vertexShader: `
+        attribute float aAlpha;
+        uniform vec2 uWorldBend;
+        uniform mat4 uBendViewMat;
+        varying vec2 vUv;
+        varying float vAlpha;
+        void main() {
+          vUv = uv;
+          vAlpha = aAlpha;
+          vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+          float bendDist = max( 0.0, -bendWorldPos.z );
+          float bendDist2 = bendDist * bendDist;
+          vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+          mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+          gl_Position = projectionMatrix * mvPosition;
+        }`,
+      fragmentShader: `
+        uniform vec3 uColor;
+        varying vec2 vUv;
+        varying float vAlpha;
+        void main() {
+          float edge = 1.0 - abs( vUv.x * 2.0 - 1.0 );
+          float soft = pow( max( 0.0, edge ), 1.4 );
+          float core = smoothstep( 0.52, 1.0, edge );
+          float fadeEnds = smoothstep( 0.0, 0.14, vUv.y ) * smoothstep( 1.0, 0.15, vUv.y );
+          vec3 col = mix( uColor, vec3( 1.0, 0.99, 0.94 ), core * 0.65 );
+          float a = soft * fadeEnds * vAlpha * 0.72;
+          if ( a <= 0.005 ) discard;
+          gl_FragColor = vec4( col, a );
+        }`,
+    });
+
+    const m = new THREE.Mesh(geo, mat);
+    m.frustumCulled = false;
+    m.renderOrder = 11;
+    m.visible = false;
+
+    const samples = Array.from({ length: segments + 1 }, () => ({ x: 0, y: 0.9, z: 0, w: 0.28, a: 0 }));
+    const targetCol = new THREE.Color(0x82ebff);
+    let sampleAccum = 0;
+
+    function update(dt, scrollDz, active, x, y, z, halfWidth, colorHex, strength = 1) {
+      targetCol.setHex(colorHex);
+      mat.uniforms.uColor.value.lerp(targetCol, 1 - Math.exp(-10 * dt));
+
+      for (let i = 1; i <= segments; i++) {
+        samples[i].z += scrollDz;
+        samples[i].a = Math.max(0, samples[i].a - dt * (active ? 2.4 : 4.2));
+      }
+      sampleAccum += dt;
+      while (sampleAccum >= 0.018) {
+        sampleAccum -= 0.018;
+        for (let i = segments; i >= 1; i--) {
+          const prev = samples[i - 1], cur = samples[i];
+          cur.x = prev.x; cur.y = prev.y; cur.z = prev.z; cur.w = prev.w; cur.a = prev.a;
+        }
+      }
+      const head = samples[0];
+      head.x = x; head.y = y; head.z = z; head.w = halfWidth;
+      head.a = active ? strength : Math.max(0, head.a - dt * 5.0);
+
+      let maxA = 0;
+      for (let i = 0; i <= segments; i++) {
+        const s = samples[i];
+        const taper = 1 - (i / segments) * 0.82;
+        const hw = s.w * taper;
+        const o = i * 6;
+        positions[o] = s.x - hw;
+        positions[o + 1] = s.y;
+        positions[o + 2] = s.z;
+        positions[o + 3] = s.x + hw;
+        positions[o + 4] = s.y;
+        positions[o + 5] = s.z;
+        alphas[i * 2] = s.a;
+        alphas[i * 2 + 1] = s.a;
+        if (s.a > maxA) maxA = s.a;
+      }
+      m.visible = maxA > 0.012;
+      if (m.visible) {
+        posAttr.needsUpdate = true;
+        alphaAttr.needsUpdate = true;
+      }
+    }
+
+    function clear() {
+      for (const s of samples) { s.x = 0; s.y = 0.9; s.z = 0; s.a = 0; }
+      sampleAccum = 0;
+      m.visible = false;
+    }
+
+    return { mesh: m, update, clear };
+  }
+
+  /* ---------- 街区专属飘落环境粒子（大学城樱花瓣 / 商业街彩屑 / 公园嫩叶 / 狂暴火星，1 次 Draw Call） ---------- */
+  function ambientWeather(handheld = false) {
+    const count = handheld ? 48 : 84;
+    // 微拱菱形花瓣/叶片几何（4 三角形，正反面双面可见）
+    const petalGeo = new THREE.BufferGeometry();
+    const pv = new Float32Array([
+      0, 0.015, 0.12,
+      -0.075, -0.012, 0,
+      0.075, -0.012, 0,
+      0, 0.015, -0.12,
+      0, 0.025, 0,
+    ]);
+    petalGeo.setAttribute('position', new THREE.BufferAttribute(pv, 3));
+    petalGeo.setIndex([0, 1, 4, 0, 4, 2, 1, 3, 4, 4, 3, 2]);
+    petalGeo.computeVertexNormals();
+
+    const mat = applyWorldBend(new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.90,
+      depthWrite: false,
+    }));
+    const inst = new THREE.InstancedMesh(petalGeo, mat, count);
+    inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    inst.frustumCulled = false;
+    inst.renderOrder = 14;
+
+    const PALETTES = [
+      [0xffb8d4, 0xffd6e8, 0xfff0f6, 0xf79ec2], // 0: 大学城 · 樱花瓣
+      [0xffe58a, 0xffa6c9, 0x9ce8ff, 0xfff7dc], // 1: 商业街 · 阳光光尘 & 节日彩屑
+      [0x9bd484, 0xc3e696, 0xfff9df, 0x7dc274], // 2: 躺平公园 · 绿叶 & 蒲公英
+      [0xff6b3b, 0xffb347, 0xffe478, 0xff4636], // 3: 5000m 狂暴 · 炽热火星
+    ];
+
+    const items = [];
+    const dummy = new THREE.Object3D();
+    const curCol = new THREE.Color();
+    const dstCol = new THREE.Color();
+    const colors = [];
+
+    for (let i = 0; i < count; i++) {
+      const pi = i % 4;
+      const c = new THREE.Color(PALETTES[0][pi]);
+      colors.push(c);
+      inst.setColorAt(i, c);
+      items.push({
+        x: (Math.random() - 0.5) * 26,
+        y: 0.6 + Math.random() * 8.6,
+        z: -54 + Math.random() * 58,
+        rx: Math.random() * Math.PI * 2,
+        ry: Math.random() * Math.PI * 2,
+        rz: Math.random() * Math.PI * 2,
+        vrx: (Math.random() - 0.5) * 3.6,
+        vry: (Math.random() - 0.5) * 3.2,
+        driftX: (Math.random() - 0.5) * 1.4,
+        fallY: 0.55 + Math.random() * 0.95,
+        phase: Math.random() * Math.PI * 2,
+        scale: 0.72 + Math.random() * 0.78,
+        pi,
+      });
+    }
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+
+    let colorMode = 0;
+    let colorLerpLeft = 0;
+
+    function update(dt, scrollDz, mode, t, baseY = 0) {
+      if (mode !== colorMode) {
+        colorMode = mode;
+        colorLerpLeft = 1.6;
+      }
+      const pal = PALETTES[mode] || PALETTES[0];
+      const ember = mode === 3;
+      const colorChanged = colorLerpLeft > 0;
+      if (colorChanged) {
+        colorLerpLeft = Math.max(0, colorLerpLeft - dt);
+        const ck = 1 - Math.exp(-3.2 * dt);
+        for (let i = 0; i < count; i++) {
+          dstCol.setHex(pal[items[i].pi]);
+          colors[i].lerp(dstCol, ck);
+          inst.setColorAt(i, colors[i]);
+        }
+        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      }
+
+      const minY = baseY + 0.35;
+      const maxY = baseY + 9.4;
+      for (let i = 0; i < count; i++) {
+        const p = items[i];
+        if (ember) {
+          p.x += (p.driftX * 1.4 + Math.sin(t * 3.8 + p.phase) * 0.9) * dt;
+          p.y += (0.55 + p.fallY * 0.65) * dt;
+          p.z += scrollDz * 1.25 + 6.5 * dt;
+        } else {
+          p.x += (p.driftX + Math.sin(t * 1.6 + p.phase) * 0.85) * dt;
+          p.y -= p.fallY * dt;
+          p.z += scrollDz * 0.88 + 0.8 * dt;
+        }
+        p.rx += p.vrx * dt;
+        p.ry += p.vry * dt;
+
+        if (p.z > 5.5 || p.y < minY || p.y > maxY + 1.5 || Math.abs(p.x) > 15.5) {
+          p.x = (Math.random() - 0.5) * 26;
+          p.y = ember ? (minY + Math.random() * 4.5) : (minY + 1.8 + Math.random() * 7.4);
+          p.z = -52 - Math.random() * 8;
+        }
+        dummy.position.set(p.x, p.y, p.z);
+        dummy.rotation.set(p.rx, p.ry, p.rz);
+        if (ember) dummy.scale.set(p.scale * 0.55, p.scale * 0.55, p.scale * 2.1);
+        else dummy.scale.setScalar(p.scale);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+    }
+
+    return { mesh: inst, update };
+  }
+
+  /* ---------- 建筑外侧 InstancedMesh 远景树林与丘陵灌木（2 次 Draw Call 填满两侧空地 + 微风摆动） ---------- */
+  function outskirtForest(handheld = false) {
+    const LOOP_LEN = 148;
+    const Z_MAX = 14;
+    const treeCount = handheld ? 74 : 124;
+    const bushCount = handheld ? 58 : 96;
+
+    // 确定性伪随机，保证每局远景构图层次丰富且不重叠
+    let seed = 20261129;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const col = hex => ({ color: new THREE.Color(hex) });
+
+    // 1. 远景树原型：树干 + 三团多层柔和树冠（烘焙顶点色，受微风着色器驱动）
+    const treeParts = [];
+    treeParts.push(mesh(cyl(0.16, 0.28, 2.35, 6), col(0x7c634f), 0, 1.15, 0, false));
+    const treeCrowns = [
+      [0, 3.15, 0, 1.42, 0x7ba469],
+      [-0.78, 2.65, 0.35, 0.98, 0x678f5c],
+      [0.82, 2.75, -0.32, 1.04, 0x8cb375],
+      [0.05, 4.05, 0.08, 0.92, 0x9bc081],
+    ];
+    for (const [x, y, z, r, hex] of treeCrowns) {
+      const puff = mesh(new THREE.IcosahedronGeometry(r, 1), col(hex), x, y, z, false);
+      puff.scale.set(1.08, 0.92, 1.04);
+      treeParts.push(puff);
+    }
+    const treeMat = applyWorldBend(
+      new THREE.MeshLambertMaterial({ vertexColors: true }),
+      { wind: true, windAmp: 1.18 }
+    );
+    const treeGeo = mergeStatic(treeParts, treeMat, { vertexColors: true }).geometry;
+    for (const p of treeParts) p.geometry.dispose();
+
+    const trees = new THREE.InstancedMesh(treeGeo, treeMat, treeCount);
+    trees.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    trees.frustumCulled = false;
+
+    // 2. 远景丘陵灌木丛原型：贴地柔和三团绿丛
+    const bushParts = [];
+    for (const [x, y, z, r, hex] of [
+      [0, 0.72, 0, 1.15, 0x769f65],
+      [-0.86, 0.54, 0.24, 0.85, 0x628a57],
+      [0.88, 0.56, -0.18, 0.88, 0x88ae71],
+    ]) {
+      const b = mesh(new THREE.IcosahedronGeometry(r, 1), col(hex), x, y, z, false);
+      b.scale.set(1.22, 0.68, 1.12);
+      bushParts.push(b);
+    }
+    const bushMat = applyWorldBend(
+      new THREE.MeshLambertMaterial({ vertexColors: true }),
+      { wind: true, windAmp: 0.45 }
+    );
+    const bushGeo = mergeStatic(bushParts, bushMat, { vertexColors: true }).geometry;
+    for (const p of bushParts) p.geometry.dispose();
+
+    const bushes = new THREE.InstancedMesh(bushGeo, bushMat, bushCount);
+    bushes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    bushes.frustumCulled = false;
+
+    const treeTints = [0xf4faec, 0xe2f0cc, 0xd1e5be, 0xf6f0d6, 0xffe4ec];
+    const bushTints = [0xf0f7e6, 0xdeecc6, 0xcce0b9, 0xedf0d4];
+    const tmpCol = new THREE.Color();
+
+    const treeData = [];
+    for (let i = 0; i < treeCount; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const band = rnd();
+      // 避开主街建筑（|x|≈10）与二排背景楼（|x|≈19-24），在 |x|∈[25.5, 68] 形成纵深林带
+      const distX = 25.5 + band * band * 42.5;
+      const baseZ = (i / treeCount) * LOOP_LEN + (rnd() - 0.5) * 3.5;
+      const sc = (1.05 + band * 0.95) * (0.85 + rnd() * 0.35);
+      const sy = sc * (0.88 + rnd() * 0.36);
+      treeData.push({ x: side * distX, baseZ, rotY: rnd() * Math.PI * 2, sx: sc, sy, sz: sc });
+      const tintHex = rnd() < 0.13 ? treeTints[4] : treeTints[Math.floor(rnd() * 4)];
+      trees.setColorAt(i, tmpCol.setHex(tintHex));
+    }
+    if (trees.instanceColor) trees.instanceColor.needsUpdate = true;
+
+    const bushData = [];
+    for (let i = 0; i < bushCount; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const band = rnd();
+      const distX = 24.5 + band * 39.5;
+      const baseZ = (i / bushCount) * LOOP_LEN + (rnd() - 0.5) * 4.5;
+      const sc = 1.15 + rnd() * 1.45;
+      bushData.push({ x: side * distX, baseZ, rotY: rnd() * Math.PI * 2, sx: sc, sy: sc * (0.8 + rnd() * 0.4), sz: sc });
+      bushes.setColorAt(i, tmpCol.setHex(bushTints[Math.floor(rnd() * bushTints.length)]));
+    }
+    if (bushes.instanceColor) bushes.instanceColor.needsUpdate = true;
+
+    const root = new THREE.Group();
+    root.add(trees, bushes);
+
+    const dummy = new THREE.Object3D();
+    let lastDist = NaN;
+    function update(distance) {
+      if (Math.abs(distance - lastDist) < 0.02) return;
+      lastDist = distance;
+      for (let i = 0; i < treeCount; i++) {
+        const d = treeData[i];
+        const z = Z_MAX - ((d.baseZ - distance) % LOOP_LEN + LOOP_LEN) % LOOP_LEN;
+        dummy.position.set(d.x, -0.06, z);
+        dummy.rotation.set(0, d.rotY, 0);
+        dummy.scale.set(d.sx, d.sy, d.sz);
+        dummy.updateMatrix();
+        trees.setMatrixAt(i, dummy.matrix);
+      }
+      trees.instanceMatrix.needsUpdate = true;
+      for (let i = 0; i < bushCount; i++) {
+        const d = bushData[i];
+        const z = Z_MAX - ((d.baseZ - distance) % LOOP_LEN + LOOP_LEN) % LOOP_LEN;
+        dummy.position.set(d.x, -0.08, z);
+        dummy.rotation.set(0, d.rotY, 0);
+        dummy.scale.set(d.sx, d.sy, d.sz);
+        dummy.updateMatrix();
+        bushes.setMatrixAt(i, dummy.matrix);
+      }
+      bushes.instanceMatrix.needsUpdate = true;
+    }
+    update(0);
+
+    return { root, update };
+  }
+
+  return { naiwa, naiwaCosmetics, doubaoFallback, obstacle, truck, oncomingTruck, truckGeometry, markTruckJump, memeBall, coin, milkPowder, power, building, tree,
     flowerBed, bench, busStop, stall, crosswalk, lamp, gantry, fountain, garden, hedge, post, trackTexture, lawnTexture,
-    sidewalkTexture, cloud, skyDome, hills, landmark, alleyFiller, backdropBuilding, parkTree, label, batchScenery,
-    characterShadows, installStreetKit, installObstacleKit, setStreetDetail, installThanos, T, L, P, Basic };
+    sidewalkTexture, cloud, skyCloudCorridor, skyDome, hills, landmark, alleyFiller, backdropBuilding, parkTree, label, batchScenery,
+    characterShadows, installStreetKit, installObstacleKit, setStreetDetail, installThanos,
+    applyWorldBend, setWorldBend, setWorldTime, applyCharacterShader, shieldDome, speedLines,
+    particleSystem, landingRings, ribbonTrail, ambientWeather, outskirtForest,
+    T, L, P, Basic };
 })();
