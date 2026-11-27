@@ -5,6 +5,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: !handheld, powerPreference
 renderer.shadowMap.enabled = false;
 renderer.domElement.id = 'game';
 stage.insertBefore(renderer.domElement, stage.firstChild);
+Models.initStudioEnv(renderer);
+const postFX = Models.postProcessor(renderer);
 let needsRender = true;
 
 const scene = new THREE.Scene();
@@ -98,7 +100,7 @@ const TRUCK_TYPES = {
   longramptruck: { half: TRUCK.longHalf, ramp: true, long: true },
   oncoming: { half: TRUCK.shortHalf, ramp: false, long: false, oncoming: true },
 };
-const OVERDRIVE_START = 5000;
+const OVERDRIVE_START = 3000;
 const OVERDRIVE_GRACE = 8;
 const CHASE_DURATION_OVERDRIVE = 7.6;
 const OVERDRIVE_COLORS = {
@@ -131,7 +133,7 @@ const STREET_ROWS = [
   ['low', 'wall'], ['bing', 'low'], ['wall', 'bing'], ['low', 'meme'],
   ['truck', 'low'], ['wall', 'power'],
 ];
-// 5000m 狂暴模式专属：去掉轻松凑数排，以高墙 + 货车 + 滑铲/低障的高压组合为主
+// 3000m 狂暴模式专属：去掉轻松凑数排，以高墙 + 货车 + 滑铲/低障的高压组合为主
 const HARD_STREET_ROWS = [
   ['wall', 'truck'], ['truck', 'wall'], ['wall', 'wall'],
   ['truck', 'bing'], ['bing', 'truck'], ['wall', 'bing'],
@@ -165,6 +167,26 @@ const chaseTrail = [{ distance: 0, x: 0, y: 0 }];
 
 const safeStoreGet = key => { try { return localStorage.getItem(key); } catch (e) { return null; } };
 const safeStoreSet = (key, val) => { try { localStorage.setItem(key, val); } catch (e) {} };
+let bloomEnabled = (() => {
+  const saved = safeStoreGet('naiwa-gfx-bloom');
+  return saved !== null ? saved === '1' : !handheld;
+})();
+const gfxToggleBtn = document.getElementById('btn-gfx-toggle');
+function syncGfxToggleUI() {
+  if (!gfxToggleBtn) return;
+  gfxToggleBtn.textContent = bloomEnabled ? '✨ 高画质（辉光）' : '⚡ 流畅模式（无后效）';
+  gfxToggleBtn.classList.toggle('is-lite', !bloomEnabled);
+}
+if (gfxToggleBtn) {
+  syncGfxToggleUI();
+  gfxToggleBtn.addEventListener('click', () => {
+    bloomEnabled = !bloomEnabled;
+    safeStoreSet('naiwa-gfx-bloom', bloomEnabled ? '1' : '0');
+    syncGfxToggleUI();
+    needsRender = true;
+    if (typeof AudioSys !== 'undefined') AudioSys.click();
+  });
+}
 const achRecord = (ev, payload) => {
   if (DEBUG_START_DIST > 0) return; // ?start= 调试空降模式不写入成就/商店/最佳纪录
   if (typeof AchievementSys !== 'undefined') AchievementSys.record(ev, payload);
@@ -188,7 +210,7 @@ const G = {
   nextBuildingL: 1, nextBuildingR: -2, nextBackdrop: 4, lastBuildingL: null, lastBuildingR: null,
   nextLamp: 20, nextGantry: 60, lastGantry: -999, nextScenery: 8, nextCrosswalk: 42, crosswalkMissed: 0, nextLandmark: 30,
   particles: [], flyingObstacles: [], shake: 0, deadTimer: 0, phase: 0, airTime: 0, support: 0, surface: null,
-  bendX: 0, bendY: 0, camRoll: 0, camSupportY: 0, fovPunch: 0, hitStop: 0, speedPulse: 0, shieldImpact: 0,
+  bendX: 0, bendY: 0, camRoll: 0, camSupportY: 0, fovPunch: 0, hitStop: 0, speedPulse: 0, shieldImpact: 0, chromaPulse: 0, duskBlend: 0,
   grounded: true, jumping: false, jumpFrom: 0, speedTier: 0, chaseTime: 0, chaseActive: false, chaseFromStumble: false,
   lastRoofTruck: null, lastAchScore: -1, lastHitType: null, runSettled: false,
   motion: '', motionUntil: 0, capture: null, roofHintUntil: 0,
@@ -270,13 +292,19 @@ const districtColors = {
 };
 const colorTargets = Object.entries(districtColors);
 const blendColor = new THREE.Color();
-let paintedDistrict = null, paintedBlend = -1, paintedOverdrive = -1;
+let paintedDistrict = null, paintedBlend = -1, paintedOverdrive = -1, paintedDusk = -1;
 const overdriveColor = new THREE.Color();
 function updateDistrictArt() {
   const here = districtAt(G.distance);
   const progress = G.distance % DISTRICT_LENGTH;
   const blend = THREE.MathUtils.smoothstep(progress, DISTRICT_LENGTH - 34, DISTRICT_LENGTH);
   const overBlend = THREE.MathUtils.smoothstep(G.distance, OVERDRIVE_START - 15, OVERDRIVE_START + 35);
+  const duskBlend = THREE.MathUtils.smoothstep(G.distance, OVERDRIVE_START - 35, OVERDRIVE_START + 15);
+  if (duskBlend !== paintedDusk) {
+    paintedDusk = duskBlend;
+    G.duskBlend = duskBlend;
+    Models.setDuskGlow(duskBlend);
+  }
   if (here === paintedDistrict && blend === paintedBlend && overBlend === paintedOverdrive) return;
   paintedDistrict = here;
   paintedBlend = blend;
@@ -328,8 +356,9 @@ function shopMods() {
   return { magnetDuration: 8, magnetRange: 20, sprintDuration: SPRINT_DURATION, shieldThrowBonus: 0 };
 }
 function shopSkins() {
-  if (typeof ShopSys !== 'undefined' && typeof ShopSys.getEquippedSkins === 'function') {
-    return ShopSys.getEquippedSkins();
+  if (typeof ShopSys !== 'undefined') {
+    if (typeof ShopSys.getEffectiveSkins === 'function') return ShopSys.getEffectiveSkins();
+    if (typeof ShopSys.getEquippedSkins === 'function') return ShopSys.getEquippedSkins();
   }
   return { glasses: false, crown: false, pass: false };
 }
@@ -340,8 +369,28 @@ function syncPlayerCosmetics() {
   needsRender = true;
 }
 syncPlayerCosmetics();
-if (typeof ShopSys !== 'undefined' && typeof ShopSys.onChange === 'function') {
-  ShopSys.onChange(syncPlayerCosmetics);
+if (typeof ShopSys !== 'undefined') {
+  if (typeof ShopSys.onChange === 'function') ShopSys.onChange(syncPlayerCosmetics);
+  if (typeof ShopSys.onModalChange === 'function') {
+    ShopSys.onModalChange(open => {
+      if (homeStage && typeof homeStage.setFittingMode === 'function') {
+        homeStage.setFittingMode(open);
+        needsRender = true;
+      }
+      syncPlayerCosmetics();
+    });
+  }
+  if (typeof ShopSys.onSkinFocus === 'function') {
+    ShopSys.onSkinFocus(skinKey => {
+      if (homeStage && typeof homeStage.focusSkin === 'function') homeStage.focusSkin(skinKey);
+    });
+  }
+  if (typeof ShopSys.setFitController === 'function') {
+    ShopSys.setFitController({
+      drag: (dx, dy) => homeStage && typeof homeStage.dragFitting === 'function' && homeStage.dragFitting(dx, dy),
+      view: v => homeStage && typeof homeStage.setFittingView === 'function' && homeStage.setFittingView(v),
+    });
+  }
 }
 const runnerRim = {
   color: { value: new THREE.Color(0xffe8a8) },
@@ -801,7 +850,7 @@ function addLowObstacleCoins(laneX, center) {
 }
 function pickPowerType(pos) {
   const over = pos >= OVERDRIVE_START;
-  // 火箭属于高收益道具（概率上调 +10%：常规 25%，5000m 狂暴后 19%、冷却 560–780m）
+  // 火箭属于高收益道具（概率上调 +10%：常规 25%，3000m 狂暴后 19%、冷却 560–780m）
   const rocketChance = over ? 0.19 : 0.25;
   if (pos >= G.nextRocketAllowed && G.sprint <= 0 && Math.random() < rocketChance) {
     G.nextRocketAllowed = pos + (over ? rand(560, 780) : rand(360, 520));
@@ -835,7 +884,7 @@ function getTruckSurface(distance, x) {
   return surface;
 }
 function runningSpeed(distance) {
-  // 5000m 前保持平缓封顶 27 m/s；5000m 起进入狂暴模式突破封顶，稳步升至 34.5 m/s
+  // 3000m 前保持平缓封顶 27 m/s；3000m 起进入狂暴模式突破封顶，稳步升至 34.5 m/s
   const lateDistance = Math.max(0, distance - 500);
   const base = Math.min(13 + distance * 0.014 + lateDistance * 0.005, 27);
   if (distance <= OVERDRIVE_START) return base;
@@ -935,29 +984,29 @@ function spawnShieldRun(pos) {
   const truck = placeTruck('truck', lane, pos + 10);
   addCoinRow(G.openLane, pos + 1.2, 4);
   const end = truckEnd(truck);
-  // 5000m 后护盾保底路线间隔拉长（从 115–165m 延至 280–400m），显著提高生存含金量
+  // 3000m 后护盾保底路线间隔拉长（从 115–165m 延至 280–400m），显著提高生存含金量
   G.nextShieldRun = end + (pos >= OVERDRIVE_START ? rand(280, 400) : rand(115, 165));
   return end;
 }
 function spawnOncomingWave(pos) {
-  // 5000m 狂暴模式专属：来车预警清空路段（必留至少 1 条完全安全通道，绝不与静态障碍穿模）
+  // 3000m 狂暴模式专属：来车预警清空路段（必留至少 1 条完全安全通道，绝不与静态障碍穿模）
   const previousLane = G.openLane;
   G.openLane = pick(LANE_X.filter(x => Math.abs(x - G.openLane) <= LANE_X[2]));
   addLaneChangeCoins(previousLane, G.openLane, pos);
   const sides = LANE_X.filter(x => x !== G.openLane);
   if (Math.random() < 0.5) sides.reverse();
 
-  const doubleCar = pos >= 6400 || Math.random() < 0.65;
-  const speedBoost = Math.min(3.5, (pos - OVERDRIVE_START) * 0.0012);
+  const doubleCar = pos >= OVERDRIVE_START + 1400 || Math.random() < 0.65;
+  const stepMult = 1 + Math.floor(Math.max(0, pos - OVERDRIVE_START) / 100) * 0.02;
   const first = addObs('oncoming', sides[0], pos + 40);
   first.oncoming = true;
-  first.moveSpeed = (rand(10.5, 13.5) + speedBoost) * 1.1;
+  first.moveSpeed = rand(10.5, 13.5) * 1.1 * stepMult;
 
   let end = pos + 44;
   if (doubleCar) {
     const second = addObs('oncoming', sides[1], pos + 56);
     second.oncoming = true;
-    second.moveSpeed = (rand(10.5, 13.5) + speedBoost) * 1.1;
+    second.moveSpeed = rand(10.5, 13.5) * 1.1 * stepMult;
     end = pos + 58;
   }
   const coinStart = previousLane === G.openLane ? pos : pos + COIN_SPACING;
@@ -983,7 +1032,7 @@ function spawnPattern(pos) {
   let end = pos + 6.4;
   for (const [i, slot] of row.entries()) {
     const lane = sides[i];
-    // 5000m 后偶发 12% 概率在边路补刷道具（比常规稀缺），保证长跑仍有翻盘博弈
+    // 3000m 后偶发 12% 概率在边路补刷道具（比常规稀缺），保证长跑仍有翻盘博弈
     if (overdrive && i === 1 && slot !== 'truck' && Math.random() < 0.12) {
       addPower(lane, pos);
       continue;
@@ -1001,7 +1050,7 @@ function spawnPattern(pos) {
       if (slot === 'low') addLowObstacleCoins(lane, obstaclePos);
     }
   }
-  // 5000m 狂暴模式核心：主通道以 62%→75% 概率放置「必跳(闹钟/栏杆)」或「必滑(画饼)」形成全三车道组合阵，100% 有解
+  // 3000m 狂暴模式核心：主通道以 62%→75% 概率放置「必跳(闹钟/栏杆)」或「必滑(画饼)」形成全三车道组合阵，100% 有解
   const fullBlockChance = overdrive ? Math.min(0.75, 0.62 + (pos - OVERDRIVE_START) * 0.00004) : 0;
   let openBlocked = null;
   if (overdrive && Math.random() < fullBlockChance) {
@@ -1271,7 +1320,7 @@ function ensureWorld() {
 
   if (G.nextSpawn < G.distance + 150) {
     const end = spawnPattern(G.nextSpawn);
-    // 5000m 前封顶 11.5m；5000m 狂暴后收紧至 9.6 → 8.4m，提升高频走位压迫感
+    // 3000m 前封顶 11.5m；3000m 狂暴后收紧至 9.6 → 8.4m，提升高频走位压迫感
     const gap = end >= OVERDRIVE_START
       ? Math.max(8.4, 9.6 - Math.min(1.2, (end - OVERDRIVE_START) * 0.0005))
       : Math.min(11.5, Math.max(6.4, 5.2 + runningSpeed(end) * 0.22));
@@ -1382,6 +1431,7 @@ function throwObstacle(obstacle) {
   G.hitStop = Math.max(G.hitStop, 0.042);
   G.fovPunch = Math.max(G.fovPunch, 4.6);
   G.speedPulse = Math.max(G.speedPulse, 0.58);
+  G.chromaPulse = Math.max(G.chromaPulse, 0.85);
   G.shieldImpact = 1.0;
   landingRings.spawn(G.px, G.py, -0.45, 0xffe478, 2.6, 0.36);
   burst(G.px, G.py + 0.85, -0.2, 0xffdf66, 12, 9.5, 1, 0.34, 0.58, 12);
@@ -1605,6 +1655,7 @@ function triggerRocketFlight(fromLoadout = false) {
   G.powderStreak = 0;
   G.fovPunch = Math.max(G.fovPunch, 3.8);
   G.speedPulse = Math.max(G.speedPulse, 0.78);
+  G.chromaPulse = Math.max(G.chromaPulse, 0.65);
   landingRings.spawn(G.px, G.py, 0, 0xffaa44, 2.5, 0.38);
   burst(G.px, G.py + 0.4, 0.4, 0xfff1dc, 10, 5.5, 0, 0.46, 0.58, -1.5, 0.8);
   burst(G.px, G.py + 0.5, 0.4, 0xff8c3a, 10, 7.5, 3, 0.30, 0.52, 6, 0.4);
@@ -1883,6 +1934,7 @@ function update(dt) {
   if (G.fovPunch > 0) G.fovPunch = Math.max(0, G.fovPunch - dt * 16);
   if (G.speedPulse > 0) G.speedPulse = Math.max(0, G.speedPulse - dt * 2.4);
   if (G.shieldImpact > 0) G.shieldImpact = Math.max(0, G.shieldImpact - dt * 2.8);
+  if (G.chromaPulse > 0) G.chromaPulse = Math.max(0, G.chromaPulse - dt * 2.6);
   if (G.state === 'intro') { G.phase += dt * 8 * 1.15; updateIntro(dt); return; }
   if (G.state === 'menu') {
     G.phase += dt * 8 * 1.15;
@@ -1983,10 +2035,11 @@ function update(dt) {
     G.shake = Math.max(G.shake, 0.55);
     G.fovPunch = Math.max(G.fovPunch, 5.2);
     G.speedPulse = 1.0;
+    G.chromaPulse = Math.max(G.chromaPulse, 0.92);
     AudioSys.overdriveAlert();
     AudioSys.setBgmTempo(1.18);
     AudioSys.say('豆包老师来了!', 0);
-    popup('🔥 5000米！狂暴模式！奶瓶 ×2！', '#ff6b4a');
+    popup('🔥 3000米！狂暴模式！奶瓶 ×2！', '#ff6b4a');
   }
   if (G.state === 'play' && G.score !== G.lastAchScore) {
     G.lastAchScore = G.score;
@@ -2432,7 +2485,7 @@ function setCoach(text) {
 }
 function updateCoach() {
   if (G.overdriveHintUntil > G.t) {
-    setCoach('🔥 5000米狂暴模式：极速飙升 · 三道连障 · 来车预警 · 奶瓶收益 ×2！');
+    setCoach('🔥 3000米狂暴模式：极速飙升 · 三道连障 · 来车预警 · 奶瓶收益 ×2！');
   } else if (G.sprint > 0) {
     const gain = (G.doubleMilk ? 10 : 5) * (G.distance >= OVERDRIVE_START ? 2 : 1);
     setCoach(handheld ? `🚀 火箭高空飞行！左右滑动收集空中奶粉（+${gain} 奶币）` : `🚀 火箭高空飞行！按 ← → 收集空中奶粉（+${gain} 奶币）`);
@@ -2537,7 +2590,8 @@ function resetGame(keepScenery = false) {
     nextRocketAllowed: Math.max(240, startDist + 180), openLane: 0, lastStreetRow: null, roofHint: false,
     truckDeck: [], lastTruckLayout: null,
     particles: [], flyingObstacles: [], shake: 0, deadTimer: 0, airTime: 0, support: 0, surface: null,
-    bendX: 0, bendY: 0, camRoll: 0, camSupportY: 0, fovPunch: 0, hitStop: 0, speedPulse: 0, shieldImpact: 0,
+    bendX: 0, bendY: 0, camRoll: 0, camSupportY: 0, fovPunch: 0, hitStop: 0, speedPulse: 0, shieldImpact: 0, chromaPulse: 0,
+    duskBlend: THREE.MathUtils.smoothstep(startDist, OVERDRIVE_START - 35, OVERDRIVE_START + 15),
     grounded: true, jumping: false, jumpFrom: 0, speedTier: Math.max(0, Math.floor((runningSpeed(startDist) - 13) / 3.5)),
     chaseTime: 0, chaseActive: false, chaseFromStumble: false, chaseDuration: CHASE_DURATION,
     overdriveTriggered: overStart, overdriveHintUntil: 0,
@@ -2970,6 +3024,7 @@ function resize() {
     Math.max(0.75, Math.sqrt(1250000 / (w * h))));
   if (pixelRatio !== renderer.getPixelRatio()) renderer.setPixelRatio(pixelRatio);
   renderer.setSize(w, h);
+  postFX.resize(w, h, renderer.getPixelRatio());
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   if (homeStage) homeStage.resize(w, h);
@@ -2988,10 +3043,18 @@ function loop(now) {
     G.t += dt;
     ensureWorld();
     Models.setWorldBend(0, 0, homeStage.camera);
+    Models.setDuskGlow(0);
     updateCharacterRims(dt, true);
     speedLines.mesh.visible = false;
     homeStage.update(dt, { player, chaser, runnerRig, chaserRig, chaserBackup, actorShadows });
-    renderer.render(homeStage.scene, homeStage.camera);
+    if (bloomEnabled) {
+      postFX.render(homeStage.scene, homeStage.camera, {
+        bloom: homeStage.isFitting() ? 0.28 : 0.32,
+        danger: 0, overdrive: 0, chroma: 0, time: G.t,
+      });
+    } else {
+      renderer.render(homeStage.scene, homeStage.camera);
+    }
     needsRender = false;
   } else {
     if (G.state !== 'pause' && G.state !== 'over') {
@@ -3002,7 +3065,20 @@ function loop(now) {
     }
     if (needsRender) {
       Models.setWorldBend(G.bendX, G.bendY, camera);
-      renderer.render(scene, camera);
+      Models.setDuskGlow(G.duskBlend || 0);
+      if (bloomEnabled) {
+        const overAmt = G.duskBlend || 0;
+        const bloomStr = 0.32 + overAmt * 0.22 + (G.sprint > 0 ? 0.14 : 0) + G.shieldImpact * 0.18;
+        const dangerAmt = (G.state === 'play' && G.grace > 0) ? Math.min(1, 0.55 + 0.45 * Math.min(1, G.grace / 2)) : 0;
+        const chromaAmt = G.state === 'play'
+          ? Math.min(1, G.chromaPulse * 0.75 + (G.sprint > 0 ? 0.22 : 0) + overAmt * 0.12)
+          : 0;
+        postFX.render(scene, camera, {
+          bloom: bloomStr, danger: dangerAmt, overdrive: overAmt, chroma: chromaAmt, time: G.t,
+        });
+      } else {
+        renderer.render(scene, camera);
+      }
       needsRender = false;
     }
   }

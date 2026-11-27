@@ -7,8 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='88'%3E%F0%9F%8D%BC%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<link rel="stylesheet" href="style.css?v=20261128">
-<link rel="preload" href="game.js?v=20261130" as="script">
+<link rel="stylesheet" href="style.css?v=20261203">
+<link rel="preload" href="game.js?v=20261203" as="script">
 </head>
 <body>
 <div id="stage">
@@ -116,6 +116,10 @@
       <input type="range" class="volume-slider" min="0" max="100" step="1" value="85" aria-label="总音量">
       <span class="volume-value">85%</span>
     </div>
+    <div class="pause-quality" aria-label="画面特效设置">
+      <span class="pause-volume-label">画质特效</span>
+      <button id="btn-gfx-toggle" type="button" class="gfx-toggle-btn">✨ 高画质（辉光）</button>
+    </div>
     <div class="over-btns">
       <button id="btn-resume" class="big-btn">继续卷</button>
       <button id="btn-ach-pause" type="button" class="big-btn ghost-btn ach-inline-btn">🏆 成就 <span class="ach-pill-num" id="ach-pause-count">0/50</span></button>
@@ -206,6 +210,7 @@
           <small>分为「购买专区」与「升级专区」，用跑酷攒下的奶瓶武装奶娃！</small>
         </div>
         <div class="shop-header-right">
+          <button id="btn-shop-stage-toggle" type="button" class="shop-stage-toggle-btn" title="全屏 3D 试衣查看">👀 3D试衣</button>
           <div id="shop-wallet-pill" class="shop-wallet-pill" title="当前可用奶瓶余额">
             <span class="shop-wallet-icon" aria-hidden="true">🍼</span>
             <span class="shop-wallet-label">奶瓶余额</span>
@@ -230,16 +235,31 @@
         <span class="ach-footer-tip">奶瓶与已购商品自动保存在本机浏览器</span>
       </div>
     </div>
+    <div id="shop-stage-pane" class="shop-stage-pane" aria-label="3D 试衣间旋转预览区">
+      <div id="shop-preview-banner" class="shop-preview-banner hidden">
+        <span id="shop-preview-label">试穿预览中</span>
+        <button id="btn-shop-preview-clear" type="button" class="shop-preview-clear">还原穿搭</button>
+      </div>
+      <div class="shop-fitting-bar">
+        <span class="shop-fitting-hint">👆 拖拽 360° 查看奶娃穿搭</span>
+        <div class="shop-fitting-btns">
+          <button type="button" class="shop-fit-btn" data-fit-view="front">正面</button>
+          <button type="button" class="shop-fit-btn" data-fit-view="back">背面金牌</button>
+          <button type="button" class="shop-fit-btn" data-fit-view="wave">挥手</button>
+          <button type="button" id="btn-shop-stage-back" class="shop-fit-btn shop-fit-back">返回商店</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <script src="vendor/three.min.js"></script>
 <script src="vendor/GLTFLoader.js"></script>
-<script src="models.js?v=20261130"></script>
-<script src="home-stage.js?v=20261127"></script>
+<script src="models.js?v=20261203"></script>
+<script src="home-stage.js?v=20261203"></script>
 <script src="audio.js?v=20261128"></script>
-<script src="achievements.js?v=20261124"></script>
-<script src="shop.js"></script>
-<script src="boot.js?v=20261130"></script>
+<script src="achievements.js?v=20261203"></script>
+<script src="shop.js?v=20261203"></script>
+<script src="boot.js?v=20261203"></script>
 </body>
 </html>

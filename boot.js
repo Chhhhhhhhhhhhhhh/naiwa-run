@@ -26,7 +26,7 @@
   button.addEventListener('click', requestStart);
   window.addEventListener('keydown', startFromKeyboard);
   const game = document.createElement('script');
-  game.src = 'game.js?v=20261130';
+  game.src = 'game.js?v=20261203';
   function handoff() {
     button.removeEventListener('click', requestStart);
     window.removeEventListener('keydown', startFromKeyboard);

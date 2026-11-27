@@ -25,6 +25,9 @@ const Models = (() => {
   const bendViewMatUniform = { value: new THREE.Matrix4() };
   const windTimeUniform = { value: 0 };
   const groundScrollUniform = { value: 0 };
+  const duskGlowUniform = { value: 0 };
+  let studioEnvTex = null;
+
   function setWorldBend(x, y, cam = null) {
     worldBendUniform.value.set(x, y);
     if (cam) {
@@ -36,10 +39,67 @@ const Models = (() => {
     windTimeUniform.value = t;
     groundScrollUniform.value = distance;
   }
+  function setDuskGlow(v) {
+    duskGlowUniform.value = THREE.MathUtils.clamp(v, 0, 1);
+  }
+  function initStudioEnv(renderer) {
+    if (studioEnvTex || !renderer || typeof THREE.PMREMGenerator !== 'function') return studioEnvTex;
+    try {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      pmrem.compileEquirectangularShader();
+      const envScene = new THREE.Scene();
+      envScene.background = new THREE.Color(0x5288b4);
+      // 程序化摄影棚柔光穹顶：上方晴空天光 + 暖金主柔光箱 + 冰蓝轮廓反光板 + 暖地反弹
+      const topBox = new THREE.Mesh(
+        new THREE.PlaneGeometry(18, 18),
+        new THREE.MeshBasicMaterial({ color: 0xfff8e6, side: THREE.DoubleSide })
+      );
+      topBox.position.set(0, 9, 0);
+      topBox.rotation.x = Math.PI / 2;
+      envScene.add(topBox);
+
+      const sunPanel = new THREE.Mesh(
+        new THREE.PlaneGeometry(12, 9),
+        new THREE.MeshBasicMaterial({ color: 0xffe29a, side: THREE.DoubleSide })
+      );
+      sunPanel.position.set(9, 5, 7);
+      sunPanel.lookAt(0, 0, 0);
+      envScene.add(sunPanel);
+
+      const rimPanel = new THREE.Mesh(
+        new THREE.PlaneGeometry(11, 8),
+        new THREE.MeshBasicMaterial({ color: 0x9ceeff, side: THREE.DoubleSide })
+      );
+      rimPanel.position.set(-9, 4, -7);
+      rimPanel.lookAt(0, 0, 0);
+      envScene.add(rimPanel);
+
+      const floorBounce = new THREE.Mesh(
+        new THREE.PlaneGeometry(24, 24),
+        new THREE.MeshBasicMaterial({ color: 0xd9c298, side: THREE.DoubleSide })
+      );
+      floorBounce.position.set(0, -8, 0);
+      floorBounce.rotation.x = -Math.PI / 2;
+      envScene.add(floorBounce);
+
+      const rt = pmrem.fromScene(envScene, 0.04);
+      studioEnvTex = rt.texture;
+      envScene.traverse(n => {
+        if (n.isMesh) { n.geometry.dispose(); n.material.dispose(); }
+      });
+      pmrem.dispose();
+    } catch (e) {
+      studioEnvTex = null;
+    }
+    return studioEnvTex;
+  }
+  function getStudioEnv() { return studioEnvTex; }
+
   function applyWorldBend(material, opts = null) {
     const wind = Boolean(opts?.wind);
     const windAmp = opts?.windAmp ?? 1.0;
     const antiTileGrass = Boolean(opts?.antiTileGrass);
+    const duskGlow = Boolean(opts?.duskGlow);
     if (!material || material.isShaderMaterial || material.userData?.worldBent) return material;
     material.userData = { ...(material.userData || {}), worldBent: true };
     if (material.isSpriteMaterial) {
@@ -60,6 +120,7 @@ const Models = (() => {
       material.customProgramCacheKey = () => 'sprite-world-bend';
     } else {
       const cacheKey = antiTileGrass ? 'mesh-world-bend-grass'
+        : duskGlow ? 'mesh-world-bend-dusk'
         : wind ? 'mesh-world-bend-wind' : 'mesh-world-bend';
       material.onBeforeCompile = shader => {
         shader.uniforms.uWorldBend = worldBendUniform;
@@ -75,6 +136,10 @@ const Models = (() => {
         if (antiTileGrass) {
           shader.uniforms.uGroundScroll = groundScrollUniform;
           vHead += 'uniform float uGroundScroll;\nvarying vec2 vGrassWorld;\n';
+        }
+        if (duskGlow) {
+          shader.uniforms.uDuskGlow = duskGlowUniform;
+          vHead += 'attribute float aGlow;\nvarying float vDuskGlow;\n';
         }
         shader.vertexShader = shader.vertexShader.replace('void main() {', vHead + 'void main() {');
         if (wind) {
@@ -99,6 +164,7 @@ const Models = (() => {
           #endif
           vec4 bendWorldPos = modelMatrix * mvPosition;
           ${antiTileGrass ? 'vGrassWorld = vec2( bendWorldPos.x, bendWorldPos.z - uGroundScroll );' : ''}
+          ${duskGlow ? 'vDuskGlow = aGlow;' : ''}
           float bendDist = max( 0.0, -bendWorldPos.z );
           float bendDist2 = bendDist * bendDist;
           mvPosition = modelViewMatrix * mvPosition;
@@ -113,6 +179,20 @@ const Models = (() => {
               `float gPatch1 = sin( vGrassWorld.x * 0.095 + vGrassWorld.y * 0.062 ) * cos( vGrassWorld.y * 0.088 - vGrassWorld.x * 0.041 );
               float gPatch2 = sin( vGrassWorld.x * 0.23 - vGrassWorld.y * 0.19 ) * 0.5;
               outgoingLight *= ( 1.0 + gPatch1 * 0.11 + gPatch2 * 0.055 );
+              gl_FragColor = vec4( outgoingLight, diffuseColor.a );`
+            );
+        }
+        if (duskGlow) {
+          shader.fragmentShader = shader.fragmentShader
+            .replace('void main() {', 'uniform float uDuskGlow;\nvarying float vDuskGlow;\nvoid main() {')
+            .replace(
+              'gl_FragColor = vec4( outgoingLight, diffuseColor.a );',
+              `float duskAmt = vDuskGlow * uDuskGlow;
+              if ( duskAmt > 0.005 ) {
+                vec3 warmWindow = mix( vec3( 1.0, 0.72, 0.30 ), vec3( 1.0, 0.91, 0.58 ), clamp( vDuskGlow, 0.0, 1.0 ) );
+                outgoingLight = mix( outgoingLight, warmWindow * 1.18, clamp( duskAmt * 0.88, 0.0, 0.92 ) )
+                  + warmWindow * ( duskAmt * 0.36 );
+              }
               gl_FragColor = vec4( outgoingLight, diffuseColor.a );`
             );
         }
@@ -213,12 +293,52 @@ const Models = (() => {
     'PlaneTree', 'PlaneTreeFar', 'BlossomTree', 'BlossomTreeFar',
     'ParkPoplar', 'ParkPoplarFar', 'MarketBunting',
   ]);
+  const DUSK_GLOW_PARTS = new Set([
+    'CampusLibrary', 'CampusLibraryFar', 'AcademicHall', 'AcademicHallFar',
+    'Dormitory', 'DormitoryFar', 'TeaCorner', 'TeaCornerFar',
+    'MilkMarket', 'MilkMarketFar', 'CampusClock', 'CampusClockFar',
+    'MilkCourt', 'MilkCourtFar', 'StreetLamp', 'BusShelter', 'MilkStall',
+  ]);
+  function tagDuskGlowAttribute(node) {
+    const colAttr = node.geometry.getAttribute('color');
+    const posAttr = node.geometry.getAttribute('position');
+    if (!colAttr || !posAttr) return;
+    const scale = colAttr.normalized ? (colAttr.array instanceof Uint16Array ? 65535 : 255) : 1;
+    const glow = new Float32Array(posAttr.count);
+    const isLamp = node.name === 'StreetLamp';
+    for (let i = 0; i < posAttr.count; i++) {
+      const r = colAttr.getX(i) / scale;
+      const g = colAttr.getY(i) / scale;
+      const b = colAttr.getZ(i) / scale;
+      const x = posAttr.getX(i), y = posAttr.getY(i), z = posAttr.getZ(i);
+      if (isLamp) {
+        if (y > 3.52 && r > 0.90 && g > 0.82 && b > 0.62) glow[i] = 1.0;
+        continue;
+      }
+      // 精准识别窗格冷青蓝玻璃与立面暖黄壁灯（排除绿青屋顶/铁艺与米白石材）
+      const isGlass = y > 0.55 && b > g + 0.012 && (b - r) > 0.085 && b > 0.25 && r < 0.56;
+      const isLantern = y > 1.0 && r > 0.88 && g > 0.78 && b > 0.52 && b < 0.68 && (r - b) > 0.24;
+      if (isLantern) {
+        glow[i] = 1.0;
+      } else if (isGlass) {
+        // 按窗格空间网格生成错落自然的室内灯光亮度，模拟真实黄昏万家灯火
+        const cell = Math.abs(Math.sin(Math.floor(x * 0.72) * 12.9898 + Math.floor(y * 0.52) * 78.233 + Math.floor(z * 0.72) * 37.719) * 43758.5453) % 1;
+        glow[i] = cell < 0.18 ? 0.16 : (0.58 + cell * 0.42);
+      }
+    }
+    node.geometry.setAttribute('aGlow', new THREE.BufferAttribute(glow, 1));
+  }
   function installStreetKit(source) {
     preparePaintedAsset(source);
     const windMat = applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true }), { wind: true, windAmp: 1.0 });
+    const duskMat = applyWorldBend(new THREE.MeshLambertMaterial({ vertexColors: true }), { duskGlow: true });
     source.traverse(node => {
       if (!node.isMesh) return;
       if (WIND_STREET_PARTS.has(node.name)) node.material = windMat;
+      else if (DUSK_GLOW_PARTS.has(node.name)) {
+        tagDuskGlowAttribute(node);
+        node.material = duskMat;
+      }
       streetKit.set(node.name, node);
     });
   }
@@ -674,14 +794,33 @@ const Models = (() => {
   /* ---------- 商店 3D 潮酷装扮模型（街溜子墨镜 / 遥遥领先小皇冠 / 免交作业金牌） ---------- */
   function naiwaCosmetics(forRig = true) {
     const grad = toonGrad();
-    const goldMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xffcf38, emissive: 0x332100, gradientMap: grad }));
-    const brightGoldMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xffe878, emissive: 0x3a2800, gradientMap: grad }));
+    const envMap = studioEnvTex;
+    const goldMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0xffcf38, emissive: 0x3b2400, metalness: 0.84, roughness: 0.24,
+      envMap, envMapIntensity: 1.35,
+    }));
+    const brightGoldMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0xffe878, emissive: 0x452d00, metalness: 0.88, roughness: 0.18,
+      envMap, envMapIntensity: 1.45,
+    }));
     const darkFrameMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0x1a1e24, emissive: 0x080a0d, gradientMap: grad }));
-    const lensMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x0d121a, shininess: 120, specular: 0xffffff }));
+    const lensMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0x101722, metalness: 0.86, roughness: 0.08,
+      envMap, envMapIntensity: 1.7,
+    }));
     const glintMat = Basic(0xa8f0ff);
-    const rubyMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0xff2e55, emissive: 0x380612, shininess: 100, specular: 0xffffff }));
-    const emeraldMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x2ee89c, emissive: 0x053320, shininess: 100, specular: 0xffffff }));
-    const sapphireMat = applyWorldBend(new THREE.MeshPhongMaterial({ color: 0x38b6ff, emissive: 0x062338, shininess: 100, specular: 0xffffff }));
+    const rubyMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0xff2e55, emissive: 0x380612, metalness: 0.22, roughness: 0.08,
+      envMap, envMapIntensity: 1.5,
+    }));
+    const emeraldMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0x2ee89c, emissive: 0x053320, metalness: 0.22, roughness: 0.08,
+      envMap, envMapIntensity: 1.5,
+    }));
+    const sapphireMat = applyWorldBend(new THREE.MeshStandardMaterial({
+      color: 0x38b6ff, emissive: 0x062338, metalness: 0.22, roughness: 0.08,
+      envMap, envMapIntensity: 1.5,
+    }));
     const velvetMat = applyWorldBend(new THREE.MeshToonMaterial({ color: 0xc92a3d, emissive: 0x26050a, gradientMap: grad }));
 
     const headMount = new THREE.Group();
@@ -2053,9 +2192,159 @@ const Models = (() => {
     }
     return crosswalkProto.clone(false);
   }
+  let lampFxProto = null;
+  function getLampDuskFx() {
+    if (!lampFxProto) {
+      lampFxProto = new THREE.Group();
+      const h1 = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.96), null);
+      const h2 = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.96), null);
+      h2.rotation.y = Math.PI / 2;
+      const haloGeo = mergeStatic([h1, h2], null, { withUV: true }).geometry;
+      h1.geometry.dispose(); h2.geometry.dispose();
+
+      const haloMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uDuskGlow: duskGlowUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            vViewDist = -mvPosition.z;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uDuskGlow;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            if ( uDuskGlow <= 0.01 ) discard;
+            float d = length( vUv * 2.0 - 1.0 );
+            if ( d > 1.0 ) discard;
+            float distFade = smoothstep( 96.0, 22.0, vViewDist );
+            float glow = pow( 1.0 - d, 2.2 ) * 0.72 + exp( -d * 5.2 ) * 0.65;
+            float alpha = glow * uDuskGlow * distFade * 0.78;
+            if ( alpha <= 0.005 ) discard;
+            gl_FragColor = vec4( vec3( 1.0, 0.89, 0.62 ), alpha );
+          }`,
+      });
+      const bulbHalo = new THREE.Mesh(haloGeo, haloMat);
+      bulbHalo.position.set(0.63, 3.72, 0);
+      lampFxProto.add(bulbHalo);
+
+      const coneGeo = new THREE.ConeGeometry(1.18, 3.65, 12, 1, true);
+      const coneMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uDuskGlow: duskGlowUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            vViewDist = -mvPosition.z;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uDuskGlow;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            if ( uDuskGlow <= 0.01 ) discard;
+            float distFade = smoothstep( 96.0, 22.0, vViewDist );
+            float vFade = smoothstep( 0.0, 0.72, vUv.y ) * smoothstep( 1.0, 0.86, vUv.y );
+            float alpha = vFade * uDuskGlow * distFade * 0.16;
+            if ( alpha <= 0.004 ) discard;
+            gl_FragColor = vec4( vec3( 1.0, 0.80, 0.42 ), alpha );
+          }`,
+      });
+      const cone = new THREE.Mesh(coneGeo, coneMat);
+      cone.position.set(0.63, 1.88, 0);
+      lampFxProto.add(cone);
+
+      const poolGeo = new THREE.CircleGeometry(1.25, 16);
+      poolGeo.rotateX(-Math.PI / 2);
+      const poolMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uDuskGlow: duskGlowUniform,
+          uWorldBend: worldBendUniform,
+          uBendViewMat: bendViewMatUniform,
+        },
+        vertexShader: `
+          uniform vec2 uWorldBend;
+          uniform mat4 uBendViewMat;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            vUv = uv;
+            vec4 bendWorldPos = modelMatrix * vec4( position, 1.0 );
+            float bendDist = max( 0.0, -bendWorldPos.z );
+            float bendDist2 = bendDist * bendDist;
+            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+            mvPosition.xyz += ( uBendViewMat * vec4( uWorldBend.x * bendDist2, uWorldBend.y * bendDist2, 0.0, 0.0 ) ).xyz;
+            vViewDist = -mvPosition.z;
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform float uDuskGlow;
+          varying vec2 vUv;
+          varying float vViewDist;
+          void main() {
+            if ( uDuskGlow <= 0.01 ) discard;
+            float d = length( vUv * 2.0 - 1.0 );
+            if ( d > 1.0 ) discard;
+            float distFade = smoothstep( 96.0, 22.0, vViewDist );
+            float alpha = pow( 1.0 - d, 1.7 ) * uDuskGlow * distFade * 0.24;
+            if ( alpha <= 0.004 ) discard;
+            gl_FragColor = vec4( vec3( 1.0, 0.82, 0.44 ), alpha );
+          }`,
+      });
+      const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+      poolMesh.position.set(0.63, 0.04, 0);
+      lampFxProto.add(poolMesh);
+      lampFxProto.traverse(n => { n.userData.sharedAsset = true; });
+    }
+    return lampFxProto.clone(true);
+  }
   function lamp() {
     const asset = streetPart('StreetLamp');
-    if (asset) return asset;
+    if (asset) {
+      const group = new THREE.Group();
+      const fx = getLampDuskFx();
+      group.add(asset, fx);
+      group.userData.farHide = [fx];
+      return group;
+    }
     const g = new THREE.Group();
     g.add(mesh(cyl(0.06, 0.09, 4, 8), L(0x4a4a55), 0, 2, 0, false));
     g.add(mesh(box(0.8, 0.08, 0.08), L(0x4a4a55), 0.35, 4, 0, false));
@@ -3503,11 +3792,214 @@ const Models = (() => {
     return { root, update };
   }
 
+  /* ---------- 桌面端轻量选择性 Bloom / 警报红晕 / 径向色散后处理管线 ---------- */
+  function postProcessor(renderer) {
+    const rtOpts = {
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false,
+    };
+    const isWebGL2 = Boolean(renderer.capabilities && renderer.capabilities.isWebGL2);
+    const makeMainRT = (w, h) => {
+      if (isWebGL2 && typeof THREE.WebGLMultisampleRenderTarget === 'function') {
+        const msaa = new THREE.WebGLMultisampleRenderTarget(w, h, rtOpts);
+        msaa.samples = 4;
+        return msaa;
+      }
+      return new THREE.WebGLRenderTarget(w, h, rtOpts);
+    };
+    const bloomOpts = {
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+    };
+
+    let width = 64, height = 64;
+    let bloomW = 32, bloomH = 32;
+    let sceneRT = makeMainRT(width, height);
+    let bloomA = new THREE.WebGLRenderTarget(bloomW, bloomH, bloomOpts);
+    let bloomB = new THREE.WebGLRenderTarget(bloomW, bloomH, bloomOpts);
+
+    const postScene = new THREE.Scene();
+    const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const quadGeo = new THREE.PlaneGeometry(2, 2);
+
+    const extractMat = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        tDiffuse: { value: sceneRT.texture },
+        uThreshold: { value: 0.84 },
+        uKnee: { value: 0.22 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float uThreshold;
+        uniform float uKnee;
+        varying vec2 vUv;
+        void main() {
+          vec3 col = texture2D( tDiffuse, vUv ).rgb;
+          float br = max( max( col.r, col.g ), col.b );
+          float lum = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+          float peak = mix( lum, br, 0.45 );
+          float soft = clamp( ( peak - uThreshold + uKnee ) / ( 2.0 * uKnee ), 0.0, 1.0 );
+          soft = soft * soft;
+          float contrib = max( soft * uKnee, peak - uThreshold ) / max( peak, 0.0001 );
+          gl_FragColor = vec4( col * max( 0.0, contrib ), 1.0 );
+        }`,
+    });
+
+    const blurMat = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        tDiffuse: { value: null },
+        uTexelDir: { value: new THREE.Vector2(1 / bloomW, 0) },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform vec2 uTexelDir;
+        varying vec2 vUv;
+        void main() {
+          vec3 sum = texture2D( tDiffuse, vUv ).rgb * 0.227027;
+          sum += texture2D( tDiffuse, vUv + uTexelDir * 1.384615 ).rgb * 0.316216;
+          sum += texture2D( tDiffuse, vUv - uTexelDir * 1.384615 ).rgb * 0.316216;
+          sum += texture2D( tDiffuse, vUv + uTexelDir * 3.230769 ).rgb * 0.070270;
+          sum += texture2D( tDiffuse, vUv - uTexelDir * 3.230769 ).rgb * 0.070270;
+          gl_FragColor = vec4( sum, 1.0 );
+        }`,
+    });
+
+    const compositeMat = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        tDiffuse: { value: sceneRT.texture },
+        tBloom: { value: bloomA.texture },
+        uBloomStrength: { value: 0.34 },
+        uDanger: { value: 0 },
+        uOverdrive: { value: 0 },
+        uChroma: { value: 0 },
+        uTime: { value: 0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tBloom;
+        uniform float uBloomStrength;
+        uniform float uDanger;
+        uniform float uOverdrive;
+        uniform float uChroma;
+        uniform float uTime;
+        varying vec2 vUv;
+        void main() {
+          vec2 off = vUv - 0.5;
+          float r2 = dot( off, off );
+          vec3 base;
+          if ( uChroma > 0.004 ) {
+            vec2 delta = off * ( uChroma * 0.011 * ( 0.4 + r2 * 1.4 ) );
+            base.r = texture2D( tDiffuse, clamp( vUv + delta, 0.001, 0.999 ) ).r;
+            base.g = texture2D( tDiffuse, vUv ).g;
+            base.b = texture2D( tDiffuse, clamp( vUv - delta, 0.001, 0.999 ) ).b;
+          } else {
+            base = texture2D( tDiffuse, vUv ).rgb;
+          }
+          vec3 bloom = texture2D( tBloom, vUv ).rgb;
+          vec3 col = base + bloom * uBloomStrength;
+          float peak = max( max( col.r, col.g ), col.b );
+          if ( peak > 1.0 ) {
+            col /= 1.0 + ( peak - 1.0 ) * 0.42;
+          }
+          float corner = smoothstep( 0.14, 0.62, r2 );
+          if ( uOverdrive > 0.01 ) {
+            col = mix( col, col * vec3( 1.02, 0.88, 0.86 ) + vec3( 0.04, 0.012, 0.03 ), corner * uOverdrive * 0.28 );
+          }
+          if ( uDanger > 0.01 ) {
+            float pulse = 0.72 + 0.28 * sin( uTime * 9.5 );
+            float edge = smoothstep( 0.09, 0.52, r2 ) * uDanger * pulse;
+            col = mix( col, vec3( 0.96, 0.16, 0.12 ), edge * 0.56 );
+          }
+          gl_FragColor = vec4( clamp( col, 0.0, 1.0 ), 1.0 );
+        }`,
+    });
+
+    const quad = new THREE.Mesh(quadGeo, extractMat);
+    postScene.add(quad);
+
+    function resize(w, h, dpr = 1) {
+      const pw = Math.max(64, Math.round(w * dpr));
+      const ph = Math.max(64, Math.round(h * dpr));
+      if (pw === width && ph === height) return;
+      width = pw; height = ph;
+      bloomW = Math.max(32, Math.floor(pw / 4));
+      bloomH = Math.max(32, Math.floor(ph / 4));
+      sceneRT.setSize(width, height);
+      bloomA.setSize(bloomW, bloomH);
+      bloomB.setSize(bloomW, bloomH);
+    }
+
+    function render(activeScene, activeCamera, opts = {}) {
+      const prevAutoClear = renderer.autoClear;
+      renderer.autoClear = true;
+      renderer.setRenderTarget(sceneRT);
+      renderer.clear();
+      renderer.render(activeScene, activeCamera);
+
+      extractMat.uniforms.tDiffuse.value = sceneRT.texture;
+      quad.material = extractMat;
+      renderer.setRenderTarget(bloomA);
+      renderer.render(postScene, postCam);
+
+      quad.material = blurMat;
+      blurMat.uniforms.tDiffuse.value = bloomA.texture;
+      blurMat.uniforms.uTexelDir.value.set(1.35 / bloomW, 0);
+      renderer.setRenderTarget(bloomB);
+      renderer.render(postScene, postCam);
+
+      blurMat.uniforms.tDiffuse.value = bloomB.texture;
+      blurMat.uniforms.uTexelDir.value.set(0, 1.35 / bloomH);
+      renderer.setRenderTarget(bloomA);
+      renderer.render(postScene, postCam);
+
+      compositeMat.uniforms.tDiffuse.value = sceneRT.texture;
+      compositeMat.uniforms.tBloom.value = bloomA.texture;
+      compositeMat.uniforms.uBloomStrength.value = opts.bloom ?? 0.34;
+      compositeMat.uniforms.uDanger.value = opts.danger ?? 0;
+      compositeMat.uniforms.uOverdrive.value = opts.overdrive ?? 0;
+      compositeMat.uniforms.uChroma.value = opts.chroma ?? 0;
+      compositeMat.uniforms.uTime.value = opts.time ?? 0;
+      quad.material = compositeMat;
+      renderer.setRenderTarget(null);
+      renderer.render(postScene, postCam);
+      renderer.autoClear = prevAutoClear;
+    }
+
+    function dispose() {
+      sceneRT.dispose(); bloomA.dispose(); bloomB.dispose();
+      quadGeo.dispose(); extractMat.dispose(); blurMat.dispose(); compositeMat.dispose();
+    }
+
+    return { resize, render, dispose };
+  }
+
   return { naiwa, naiwaCosmetics, doubaoFallback, obstacle, truck, oncomingTruck, truckGeometry, markTruckJump, memeBall, coin, milkPowder, power, building, tree,
     flowerBed, bench, busStop, stall, crosswalk, lamp, gantry, fountain, garden, hedge, post, trackTexture, lawnTexture,
     sidewalkTexture, cloud, skyCloudCorridor, skyDome, hills, landmark, alleyFiller, backdropBuilding, parkTree, label, batchScenery,
     characterShadows, installStreetKit, installObstacleKit, setStreetDetail, installThanos,
-    applyWorldBend, setWorldBend, setWorldTime, applyCharacterShader, shieldDome, speedLines,
+    applyWorldBend, setWorldBend, setWorldTime, setDuskGlow, initStudioEnv, getStudioEnv, postProcessor,
+    applyCharacterShader, shieldDome, speedLines,
     particleSystem, landingRings, ribbonTrail, ambientWeather, outskirtForest,
     T, L, P, Basic };
 })();

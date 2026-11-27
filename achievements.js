@@ -1209,10 +1209,19 @@ const AchievementSys = (() => {
     if (!strip || !list) return;
     if (!run.newUnlocked.length) {
       strip.classList.add('hidden');
+      list.classList.remove('is-scroll');
       list.replaceChildren();
       return;
     }
+    const scrollable = run.newUnlocked.length > 3;
+    const head = strip.querySelector('.over-ach-head');
+    if (head) {
+      head.textContent = scrollable
+        ? `🎉 本局新达成成就 (${run.newUnlocked.length}) · 滚轮/左右滑查看更多`
+        : '🎉 本局新达成成就（点击看详细说明）';
+    }
     strip.classList.remove('hidden');
+    list.classList.toggle('is-scroll', scrollable);
     list.replaceChildren();
     for (const id of run.newUnlocked) {
       const ach = ACH_BY_ID[id];
@@ -1231,6 +1240,7 @@ const AchievementSys = (() => {
       btn.addEventListener('click', () => openDetail(id, btn));
       list.appendChild(btn);
     }
+    list.scrollLeft = 0;
   }
 
   /* ---------- 成就图鉴弹窗 + 详情勋章卡 ---------- */
@@ -1562,6 +1572,18 @@ const AchievementSys = (() => {
     }
     const detailClose = document.getElementById('btn-ach-detail-close');
     if (detailClose) detailClose.addEventListener('click', closeDetail);
+
+    const overAchList = document.getElementById('over-ach-list');
+    if (overAchList) {
+      overAchList.addEventListener('wheel', e => {
+        if (overAchList.scrollWidth <= overAchList.clientWidth) return;
+        const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+        if (delta !== 0) {
+          e.preventDefault();
+          overAchList.scrollLeft += delta;
+        }
+      }, { passive: false });
+    }
 
     const replayBtn = document.getElementById('btn-ach-replay');
     if (replayBtn) {

@@ -275,15 +275,44 @@ const ShopSys = (() => {
   let resetArmed = false;
   let resetConfirmTimer = null;
   let noticeTimer = null;
+  let previewSkins = null;
+  let previewLabel = '';
   const listeners = [];
+  const modalListeners = [];
+  const focusListeners = [];
+  let fitController = null;
 
   function onChange(fn) {
     if (typeof fn === 'function') listeners.push(fn);
   }
 
+  function onModalChange(fn) {
+    if (typeof fn === 'function') modalListeners.push(fn);
+  }
+
+  function onSkinFocus(fn) {
+    if (typeof fn === 'function') focusListeners.push(fn);
+  }
+
+  function setFitController(ctrl) {
+    fitController = ctrl || null;
+  }
+
   function notifyChange() {
     for (const fn of listeners) {
       try { fn(getState()); } catch (e) {}
+    }
+  }
+
+  function notifyModal(open) {
+    for (const fn of modalListeners) {
+      try { fn(open); } catch (e) {}
+    }
+  }
+
+  function notifySkinFocus(skinKey) {
+    for (const fn of focusListeners) {
+      try { fn(skinKey); } catch (e) {}
     }
   }
 
@@ -317,6 +346,52 @@ const ShopSys = (() => {
       crown: !!data.equippedSkins.skin_crown,
       pass: !!data.equippedSkins.skin_pass,
     };
+  }
+
+  function getEffectiveSkins() {
+    const base = getEquippedSkins();
+    return previewSkins ? Object.assign(base, previewSkins) : base;
+  }
+
+  function syncPreviewBanner() {
+    if (typeof document === 'undefined') return;
+    const banner = document.getElementById('shop-preview-banner');
+    const lbl = document.getElementById('shop-preview-label');
+    if (!banner) return;
+    const has = Boolean(previewSkins);
+    banner.classList.toggle('hidden', !has);
+    if (has && lbl) lbl.textContent = `✨ 正在试穿：${previewLabel || '3D 装扮'}`;
+  }
+
+  function clearPreview() {
+    if (!previewSkins) return;
+    previewSkins = null;
+    previewLabel = '';
+    syncPreviewBanner();
+    notifyChange();
+    if (modalOpen) renderContent();
+  }
+
+  function toggleSkinPreview(itemId) {
+    const item = ITEM_BY_ID[itemId];
+    if (!item || item.kind !== 'skin') return;
+    const key = item.id.replace('skin_', '');
+    if (typeof AudioSys !== 'undefined') {
+      AudioSys.init();
+      AudioSys.click();
+    }
+    if (previewSkins && previewSkins[key]) {
+      clearPreview();
+      setNotice('👌 已还原奶娃当前实际穿搭。', 'info');
+      return;
+    }
+    previewSkins = { [key]: true };
+    previewLabel = item.name;
+    syncPreviewBanner();
+    notifyChange();
+    notifySkinFocus(key);
+    renderContent();
+    setNotice(`👀 正在右侧 3D 展台试穿预览「${item.name}」（可拖拽 360° 端详）！`, 'ok');
   }
 
   function getArmedBoosts() {
@@ -474,14 +549,23 @@ const ShopSys = (() => {
 
     // 已解锁装扮：切换穿戴状态
     if (item.kind === 'skin' && data.unlockedSkins[item.id]) {
+      const skinKey = item.id.replace('skin_', '');
       const nextState = !data.equippedSkins[item.id];
       if (nextState) data.equippedSkins[item.id] = true;
       else delete data.equippedSkins[item.id];
+      if (previewSkins && previewSkins[skinKey]) {
+        delete previewSkins[skinKey];
+        if (Object.keys(previewSkins).length === 0) {
+          previewSkins = null;
+          previewLabel = '';
+        }
+        syncPreviewBanner();
+      }
       saveData();
       if (typeof AudioSys !== 'undefined') AudioSys.click();
       setNotice(
         nextState
-          ? `✨ 已为奶娃穿戴 3D 装扮「${item.name}」！快回首页看看奶娃的新造型吧～`
+          ? `✨ 已为奶娃穿戴 3D 装扮「${item.name}」！右侧 3D 展台已实时换装，可拖拽 360° 查看～`
           : `👌 已卸下「${item.name}」。`,
         'ok'
       );
@@ -489,6 +573,7 @@ const ShopSys = (() => {
       renderContent();
       syncEntryBadges();
       notifyChange();
+      if (nextState) notifySkinFocus(skinKey);
       return true;
     }
 
@@ -527,10 +612,17 @@ const ShopSys = (() => {
       if (typeof AudioSys !== 'undefined') AudioSys.power();
       setNotice(`⚡ 强化成功！消耗 ${price} 🍼 将「${item.name}」升至 Lv.${nextLv}/${item.maxLevel}（${item.formatLevel(nextLv)}）！`, 'ok');
     } else if (item.kind === 'skin') {
+      const skinKey = item.id.replace('skin_', '');
       data.unlockedSkins[item.id] = true;
       data.equippedSkins[item.id] = true;
+      if (previewSkins && previewSkins[skinKey]) {
+        previewSkins = null;
+        previewLabel = '';
+        syncPreviewBanner();
+      }
       if (typeof AudioSys !== 'undefined') AudioSys.power();
       setNotice(`🎉 解锁成功！消耗 ${price} 🍼 入手并穿戴 3D 装扮「${item.name}」！`, 'ok');
+      notifySkinFocus(skinKey);
     }
 
     saveData();
@@ -691,21 +783,28 @@ const ShopSys = (() => {
         </button>`;
       }
     } else if (item.kind === 'skin') {
+      const skinKey = item.id.replace('skin_', '');
       const unlocked = !!data.unlockedSkins[item.id];
       const equipped = !!data.equippedSkins[item.id];
+      const previewing = !!(previewSkins && previewSkins[skinKey]);
       if (unlocked) cardClass += ' owned';
       if (equipped) cardClass += ' equipped';
-      statusHtml = `<span class="shop-stock-pill ${unlocked ? 'has-stock' : ''}">${
-        equipped ? '✨ 奶娃穿戴中' : unlocked ? '✅ 已永久解锁' : '🔒 未解锁装扮'
+      statusHtml = `<span class="shop-stock-pill ${unlocked || previewing ? 'has-stock' : ''}">${
+        equipped ? '✨ 奶娃穿戴中' : previewing ? '👀 3D 试穿中' : unlocked ? '✅ 已永久解锁' : '🔒 未解锁装扮'
       }</span>`;
       if (unlocked) {
         actionsHtml = `<button type="button" class="shop-buy-btn is-equip ${equipped ? 'active' : ''}" data-shop-buy="${item.id}">
           ${equipped ? '✓ 穿戴中（点击卸下）' : '立即穿戴'}
         </button>`;
       } else {
-        actionsHtml = `<button type="button" class="shop-buy-btn ${canAfford ? '' : 'lacking'}" data-shop-buy="${item.id}">
-          <span>购买解锁</span><strong class="shop-price">🍼 ${price}</strong>
-        </button>`;
+        actionsHtml = `<div class="shop-btn-row">
+          <button type="button" class="shop-try-btn ${previewing ? 'active' : ''}" data-shop-preview="${item.id}" title="在 3D 展台试穿看看效果">
+            ${previewing ? '✓ 试穿中' : '👀 试穿'}
+          </button>
+          <button type="button" class="shop-buy-btn ${canAfford ? '' : 'lacking'}" data-shop-buy="${item.id}">
+            <span>解锁</span><strong class="shop-price">🍼 ${price}</strong>
+          </button>
+        </div>`;
       }
     }
 
@@ -774,6 +873,13 @@ const ShopSys = (() => {
         if (id) toggleBoostArm(id);
       });
     });
+
+    container.querySelectorAll('[data-shop-preview]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-shop-preview');
+        if (id) toggleSkinPreview(id);
+      });
+    });
   }
 
   function disarmReset() {
@@ -794,6 +900,9 @@ const ShopSys = (() => {
   function resetAll() {
     data = defaultData(0);
     currentRunEarned = 0;
+    previewSkins = null;
+    previewLabel = '';
+    syncPreviewBanner();
     saveData();
     disarmReset();
     syncEntryBadges();
@@ -812,12 +921,15 @@ const ShopSys = (() => {
     if (!modal) return;
     returnFocusEl = triggerEl || document.activeElement;
     modalOpen = true;
+    modal.classList.remove('mobile-preview');
+    syncPreviewBanner();
     disarmReset();
     renderHeaderStats();
     renderSectionTabs();
     renderContent();
     setNotice(defaultNoticeText(), 'info');
     modal.classList.remove('hidden');
+    notifyModal(true);
     if (typeof AudioSys !== 'undefined') AudioSys.click();
     const closeBtn = document.getElementById('btn-shop-close');
     if (closeBtn) closeBtn.focus({ preventScroll: true });
@@ -827,8 +939,18 @@ const ShopSys = (() => {
     if (typeof document === 'undefined') return;
     disarmReset();
     const modal = document.getElementById('shop-modal');
-    if (modal) modal.classList.add('hidden');
+    if (modal) {
+      modal.classList.remove('mobile-preview');
+      modal.classList.add('hidden');
+    }
     modalOpen = false;
+    if (previewSkins) {
+      previewSkins = null;
+      previewLabel = '';
+      syncPreviewBanner();
+      notifyChange();
+    }
+    notifyModal(false);
     if (returnFocusEl && typeof returnFocusEl.focus === 'function') {
       try { returnFocusEl.focus({ preventScroll: true }); } catch (e) {}
     }
@@ -908,6 +1030,69 @@ const ShopSys = (() => {
       });
     }
 
+    const stagePane = document.getElementById('shop-stage-pane');
+    if (stagePane) {
+      let dragging = false, lastX = 0, lastY = 0;
+      stagePane.addEventListener('pointerdown', e => {
+        if (e.target instanceof HTMLButtonElement) return;
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        stagePane.classList.add('dragging');
+        if (stagePane.setPointerCapture) {
+          try { stagePane.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+      });
+      stagePane.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        if (fitController && typeof fitController.drag === 'function') {
+          fitController.drag(dx, dy);
+        }
+      });
+      const endDrag = () => {
+        dragging = false;
+        stagePane.classList.remove('dragging');
+      };
+      stagePane.addEventListener('pointerup', endDrag);
+      stagePane.addEventListener('pointercancel', endDrag);
+
+      stagePane.querySelectorAll('[data-fit-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const v = btn.getAttribute('data-fit-view');
+          if (typeof AudioSys !== 'undefined') AudioSys.click();
+          if (fitController && typeof fitController.view === 'function') fitController.view(v);
+        });
+      });
+    }
+
+    const clearPreviewBtn = document.getElementById('btn-shop-preview-clear');
+    if (clearPreviewBtn) {
+      clearPreviewBtn.addEventListener('click', () => {
+        if (typeof AudioSys !== 'undefined') AudioSys.click();
+        clearPreview();
+        setNotice('👌 已还原奶娃当前实际穿搭。', 'info');
+      });
+    }
+
+    const mobileStageToggle = document.getElementById('btn-shop-stage-toggle');
+    const mobileStageBack = document.getElementById('btn-shop-stage-back');
+    if (mobileStageToggle && modal) {
+      mobileStageToggle.addEventListener('click', () => {
+        if (typeof AudioSys !== 'undefined') AudioSys.click();
+        modal.classList.add('mobile-preview');
+      });
+    }
+    if (mobileStageBack && modal) {
+      mobileStageBack.addEventListener('click', () => {
+        if (typeof AudioSys !== 'undefined') AudioSys.click();
+        modal.classList.remove('mobile-preview');
+      });
+    }
+
     syncEntryBadges();
   }
 
@@ -923,6 +1108,9 @@ const ShopSys = (() => {
     ITEMS,
     SECTIONS,
     onChange,
+    onModalChange,
+    onSkinFocus,
+    setFitController,
     startRun,
     consumeRunLoadout,
     addBottles,
@@ -931,6 +1119,7 @@ const ShopSys = (() => {
     toggleBoostArm,
     getModifiers,
     getEquippedSkins,
+    getEffectiveSkins,
     getArmedBoosts,
     openModal,
     closeModal,

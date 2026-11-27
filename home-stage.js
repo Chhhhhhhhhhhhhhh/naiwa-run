@@ -235,8 +235,14 @@ const HomeStage = (() => {
     const STAGE_R = 3.55;
     const TRACK_R = 2.40;
     const runwayTex = createRunwayTexture();
+    const envMap = typeof Models.getStudioEnv === 'function' ? Models.getStudioEnv() : null;
+    const goldSideMat = envMap
+      ? new THREE.MeshStandardMaterial({
+          color: 0xeeb93b, emissive: 0x261a04, metalness: 0.72, roughness: 0.28, envMap, envMapIntensity: 1.15,
+        })
+      : new THREE.MeshLambertMaterial({ color: 0xeeb93b });
     const deckMat = [
-      new THREE.MeshLambertMaterial({ color: 0xeeb93b }), // 侧面暖金包边
+      goldSideMat, // 侧面暖金包边
       new THREE.MeshLambertMaterial({ map: runwayTex }), // 顶面跑道
       new THREE.MeshLambertMaterial({ color: 0x205550 }), // 底面
     ];
@@ -247,7 +253,11 @@ const HomeStage = (() => {
     // 外围高亮金色倒角护边环
     const rimRing = new THREE.Mesh(
       new THREE.TorusGeometry(STAGE_R + 0.04, 0.10, 12, 56),
-      new THREE.MeshLambertMaterial({ color: 0xf7c948, emissive: 0x281c04 })
+      envMap
+        ? new THREE.MeshStandardMaterial({
+            color: 0xf7c948, emissive: 0x2a1c03, metalness: 0.78, roughness: 0.24, envMap, envMapIntensity: 1.3,
+          })
+        : new THREE.MeshLambertMaterial({ color: 0xf7c948, emissive: 0x281c04 })
     );
     rimRing.rotation.x = Math.PI / 2;
     rimRing.position.y = -0.04;
@@ -398,6 +408,62 @@ const HomeStage = (() => {
       teacherJumpDelay: -1,
     };
 
+    // 商店 3D 试衣间交互状态
+    const fitting = {
+      active: false,
+      blend: 0,
+      yaw: 0.22,
+      targetYaw: 0.22,
+      pitch: 0.06,
+      targetPitch: 0.06,
+      poseTimer: 0,
+    };
+
+    function setFittingMode(active, { focus = null } = {}) {
+      fitting.active = Boolean(active);
+      if (fitting.active) {
+        fitting.targetYaw = focus === 'back' ? Math.PI - 0.24 : 0.22;
+        fitting.targetPitch = 0.06;
+        fitting.poseTimer = 1.65;
+      }
+    }
+
+    function focusSkin(skinKey) {
+      if (skinKey === 'pass') {
+        fitting.targetYaw = Math.PI - 0.26;
+        fitting.targetPitch = 0.08;
+        fitting.poseTimer = 0.2;
+      } else {
+        fitting.targetYaw = 0.22;
+        fitting.targetPitch = skinKey === 'crown' ? 0.14 : 0.06;
+        fitting.poseTimer = 1.5;
+      }
+    }
+
+    function setFittingView(preset) {
+      if (preset === 'back') {
+        fitting.targetYaw = Math.PI - 0.24;
+        fitting.targetPitch = 0.08;
+      } else if (preset === 'wave') {
+        fitting.targetYaw = 0.18;
+        fitting.targetPitch = 0.06;
+        fitting.poseTimer = 1.65;
+      } else {
+        fitting.targetYaw = 0.22;
+        fitting.targetPitch = 0.06;
+      }
+    }
+
+    function dragFitting(dx, dy) {
+      fitting.targetYaw += dx * 0.011;
+      fitting.targetPitch = THREE.MathUtils.clamp(fitting.targetPitch + dy * 0.0045, -0.18, 0.34);
+    }
+
+    const fitCamPos = new THREE.Vector3();
+    const fitCamLook = new THREE.Vector3();
+    const normCamPos = new THREE.Vector3();
+    const normCamLook = new THREE.Vector3();
+
     function reset() {
       show.mode = 'chase';
       show.modeT = 0;
@@ -414,7 +480,9 @@ const HomeStage = (() => {
 
     function resize(width, height) {
       camera.aspect = width / Math.max(1, height);
-      camera.fov = camera.aspect < 0.95 ? 50 : 41;
+      const baseFov = camera.aspect < 0.95 ? 50 : 41;
+      const fitFov = camera.aspect < 0.95 ? 40 : 32;
+      camera.fov = THREE.MathUtils.lerp(baseFov, fitFov, fitting.blend);
       camera.updateProjectionMatrix();
     }
 
@@ -425,9 +493,21 @@ const HomeStage = (() => {
       const portrait = camera.aspect < 0.95;
       const wide = THREE.MathUtils.clamp((camera.aspect - 0.95) / 0.8, 0, 1);
 
-      // 舞台按屏幕宽高比精准避让左侧 UI，确保整座悬浮圆台与底部反重力发光环完整入镜
-      const stageX = portrait ? 0 : THREE.MathUtils.lerp(2.45, 3.35, wide);
-      const stageY = Math.sin(t * 1.15) * 0.14 + (portrait ? -0.95 : 0.15);
+      const fitTarget = fitting.active ? 1 : 0;
+      fitting.blend += (fitTarget - fitting.blend) * (1 - Math.exp(-6.5 * dt));
+      if (fitting.blend < 0.002 && !fitting.active) fitting.blend = 0;
+      const fb = fitting.blend;
+      fitting.yaw += (fitting.targetYaw - fitting.yaw) * (1 - Math.exp(-9 * dt));
+      fitting.pitch += (fitting.targetPitch - fitting.pitch) * (1 - Math.exp(-9 * dt));
+      if (fitting.poseTimer > 0) fitting.poseTimer = Math.max(0, fitting.poseTimer - dt);
+
+      // 舞台按屏幕宽高比精准避让左侧 UI；进入试衣间模式后，宽屏让奶娃立于右侧展台中心、竖屏居中特写
+      const normStageX = portrait ? 0 : THREE.MathUtils.lerp(2.45, 3.35, wide);
+      const normStageY = Math.sin(t * 1.15) * 0.14 + (portrait ? -0.95 : 0.15);
+      const fitStageX = portrait ? 0 : THREE.MathUtils.lerp(2.75, 3.35, wide);
+      const fitStageY = Math.sin(t * 1.15) * 0.06 + (portrait ? -0.35 : -0.10);
+      const stageX = THREE.MathUtils.lerp(normStageX, fitStageX, fb);
+      const stageY = THREE.MathUtils.lerp(normStageY, fitStageY, fb);
       const stageZ = 0;
       stageGroup.position.set(stageX, stageY, stageZ);
 
@@ -436,20 +516,26 @@ const HomeStage = (() => {
       hoverRing2.rotation.z = -t * 0.82;
       hoverRing1.scale.setScalar(1 + Math.sin(t * 2.4) * 0.03);
       hoverRing2.scale.setScalar(1 + Math.cos(t * 2.9) * 0.04);
+      centerBottle.visible = fb < 0.45;
       centerBottle.rotation.y = t * 1.25;
       centerBottle.position.y = 0.94 + Math.sin(t * 2.3) * 0.11;
 
-      // 倾斜星环小星星运转
-      const haloR = STAGE_R + 1.15;
-      for (const s of haloStars) {
-        const a = t * 0.72 + s.phase;
-        s.mesh.position.set(Math.cos(a) * haloR, 0, Math.sin(a) * haloR);
-        s.mesh.rotation.y = t * 2.4;
-        s.mesh.rotation.x = t * 1.6;
+      // 倾斜星环小星星运转（试衣间近景模式时隐退避免近距穿镜挡住角色）
+      haloGroup.visible = fb < 0.55;
+      if (haloGroup.visible) {
+        const haloR = STAGE_R + 1.15;
+        for (const s of haloStars) {
+          const a = t * 0.72 + s.phase;
+          s.mesh.position.set(Math.cos(a) * haloR, 0, Math.sin(a) * haloR);
+          s.mesh.rotation.y = t * 2.4;
+          s.mesh.rotation.x = t * 1.6;
+        }
       }
 
-      // 外围漂浮经典道具公转 + 柔波起伏
+      // 外围漂浮经典道具公转 + 柔波起伏（试衣间模式下隐退避免遮挡装扮特写）
       for (const o of orbiters) {
+        o.mesh.visible = fb < 0.55;
+        if (!o.mesh.visible) continue;
         const a = t * o.speed + o.phase;
         o.mesh.position.set(
           Math.cos(a) * o.radius,
@@ -604,17 +690,25 @@ const HomeStage = (() => {
 
       const ud = player.userData;
       player.visible = true;
-      player.position.set(nWx, stageY + naiwaY, nWz);
-      player.rotation.set(0, show.naiwaRot, show.mode === 'boost' ? 0.14 : 0);
-      ud.spin.rotation.x = showRocket ? -0.22 : 0;
+      const inFitShow = fb > 0.02;
+      const fitLift = 0.22;
+      const showNaiwaX = THREE.MathUtils.lerp(nWx, stageX, fb);
+      const showNaiwaY = stageY + THREE.MathUtils.lerp(naiwaY, fitLift, fb);
+      const showNaiwaZ = THREE.MathUtils.lerp(nWz, stageZ, fb);
+      player.position.set(showNaiwaX, showNaiwaY, showNaiwaZ);
+
+      const fitRot = Math.PI + fitting.yaw;
+      const blendedRot = fb > 0.005 ? lerpAngle(show.naiwaRot, fitRot, fb) : show.naiwaRot;
+      player.rotation.set(0, blendedRot, (1 - fb) * (show.mode === 'boost' ? 0.14 : 0));
+      ud.spin.rotation.x = (1 - fb) * (showRocket ? -0.22 : 0);
       ud.egg.visible = false;
       ud.torso.visible = !runnerRig;
       for (const leg of ud.legs) leg.visible = ud.torso.visible;
       if (ud.shieldMesh) ud.shieldMesh.visible = false;
 
-      // 火箭喷火小彩蛋
-      ud.aura.visible = showRocket;
-      if (showRocket) {
+      // 火箭喷火小彩蛋（试衣间时隐藏）
+      ud.aura.visible = showRocket && fb < 0.35;
+      if (ud.aura.visible) {
         const flames = ud.auraFlames || ud.aura.children;
         flames.forEach((f, i) => f.scale.set(
           0.85 + Math.abs(Math.sin(t * 24 + i)) * 0.35,
@@ -623,69 +717,87 @@ const HomeStage = (() => {
         ));
       }
 
+      const finalNaiwaAction = fb > 0.45 ? (fitting.poseTimer > 0 ? 'Greeting' : 'Idle') : naiwaAction;
+      const finalNaiwaSpeed = fb > 0.45 ? 1.0 : naiwaAnimSpeed;
       if (runnerRig) {
         runnerRig.model.visible = true;
-        runnerRig.animate(naiwaAction, dt, naiwaAnimSpeed);
+        runnerRig.animate(finalNaiwaAction, dt, finalNaiwaSpeed);
       } else {
         const sw = Math.sin(t * 11);
-        const moving = naiwaAction === 'Run';
+        const moving = finalNaiwaAction === 'Run';
         ud.legs[0].rotation.x = moving ? sw * 0.75 : 0;
         ud.legs[1].rotation.x = moving ? -sw * 0.75 : 0;
         ud.arms[0].rotation.x = moving ? -sw * 0.65 : -0.35;
         ud.arms[1].rotation.x = moving ? sw * 0.65 : -0.35;
       }
 
-      chaser.visible = true;
+      chaser.visible = fb < 0.55;
       chaser.position.set(tWx, stageY + teacherY, tWz);
       chaser.rotation.set(0, show.teacherRot, 0);
-      if (chaserRig) {
-        chaserRig.animate(teacherAction, dt, teacherAnimSpeed);
-      } else if (chaserBackup?.userData?.arms) {
-        for (const [i, arm] of chaserBackup.userData.arms.entries()) {
-          const sw = Math.sin(t * 11 + i * Math.PI);
-          arm.rotation.x = teacherAction === 'Grab' ? -1.35 : teacherAction === 'Run' ? sw * 0.55 : 0;
+      if (chaser.visible) {
+        if (chaserRig) {
+          chaserRig.animate(teacherAction, dt, teacherAnimSpeed);
+        } else if (chaserBackup?.userData?.arms) {
+          for (const [i, arm] of chaserBackup.userData.arms.entries()) {
+            const sw = Math.sin(t * 11 + i * Math.PI);
+            arm.rotation.x = teacherAction === 'Grab' ? -1.35 : teacherAction === 'Run' ? sw * 0.55 : 0;
+          }
         }
       }
 
-      // 脚底接触阴影贴合悬浮舞台顶面（stageY + 0.03）
+      // 脚底接触阴影贴合悬浮舞台顶面（试衣间时贴合中央高台顶面 stageY + 0.22）
       const [runnerShadow, chaserShadow] = actorShadows;
-      const updateShadow = (sh, actor, lift, w, d) => {
-        sh.visible = true;
+      const updateShadow = (sh, actor, lift, floorY, w, d, alphaScale = 1) => {
+        sh.visible = actor.visible;
+        if (!sh.visible) return;
         const spread = 1 + Math.min(lift, 1.5) * 0.25;
-        sh.position.set(actor.position.x, stageY + 0.035, actor.position.z);
+        sh.position.set(actor.position.x, floorY + 0.035, actor.position.z);
         sh.rotation.set(-Math.PI / 2, 0, 0);
         sh.scale.set(w * spread, d * spread, 1);
-        sh.material.opacity = 0.85 / (1 + lift * 1.7);
+        sh.material.opacity = (0.85 / (1 + lift * 1.7)) * alphaScale;
       };
-      updateShadow(runnerShadow, player, naiwaY, 1.52, 1.18);
-      updateShadow(chaserShadow, chaser, teacherY, 1.24, 1.16);
+      const naiwaFloor = stageY + fb * fitLift;
+      const naiwaLift = Math.max(0, showNaiwaY - naiwaFloor);
+      updateShadow(runnerShadow, player, naiwaLift, naiwaFloor, 1.52, 1.18);
+      updateShadow(chaserShadow, chaser, teacherY, stageY, 1.24, 1.16, 1 - fb);
 
-      // 电影级平滑鼠标 3D 视差运镜 + 轻微自然呼吸漂移
+      // 电影级平滑鼠标 3D 视差运镜 + 商店 3D 试衣间特写运镜丝滑插值
       const damp = 1 - Math.exp(-4.5 * dt);
       pointer.x += (pointer.tx - pointer.x) * damp;
       pointer.y += (pointer.ty - pointer.y) * damp;
 
-      const driftX = Math.sin(t * 0.42) * 0.26;
-      const driftY = Math.cos(t * 0.55) * 0.12;
+      const driftX = Math.sin(t * 0.42) * 0.26 * (1 - fb * 0.85);
+      const driftY = Math.cos(t * 0.55) * 0.12 * (1 - fb * 0.85);
       if (portrait) {
-        camera.position.set(
-          pointer.x * 0.60 + driftX,
-          3.95 - pointer.y * 0.32 + driftY,
-          12.4
-        );
-        camera.lookAt(0, 1.55, 0);
+        normCamPos.set(pointer.x * 0.60 + driftX, 3.95 - pointer.y * 0.32 + driftY, 12.4);
+        normCamLook.set(0, 1.55, 0);
+        fitCamPos.set(stageX, stageY + 1.55 + fitting.pitch * 1.6, 5.45);
+        fitCamLook.set(stageX, stageY + 1.18, stageZ);
       } else {
         const camZ = THREE.MathUtils.lerp(13.2, 11.4, wide);
-        camera.position.set(
-          0.15 + pointer.x * 0.78 + driftX,
-          3.45 - pointer.y * 0.38 + driftY,
-          camZ
-        );
-        camera.lookAt(THREE.MathUtils.lerp(0.15, 0.35, wide), 0.92, 0);
+        normCamPos.set(0.15 + pointer.x * 0.78 + driftX, 3.45 - pointer.y * 0.38 + driftY, camZ);
+        normCamLook.set(THREE.MathUtils.lerp(0.15, 0.35, wide), 0.92, 0);
+        // 左侧为商店抽屉，镜头朝右半边透明展区偏移对焦，让奶娃正处于右侧展台中央
+        const offsetL = THREE.MathUtils.lerp(1.42, 1.55, wide);
+        fitCamPos.set(stageX - offsetL + pointer.x * 0.12, stageY + 1.56 + fitting.pitch * 1.45, 5.55);
+        fitCamLook.set(stageX - offsetL, stageY + 1.16, stageZ);
+      }
+      camera.position.lerpVectors(normCamPos, fitCamPos, fb);
+      const lookVec = normCamLook.lerp(fitCamLook, fb);
+      camera.lookAt(lookVec);
+
+      const targetFov = THREE.MathUtils.lerp(portrait ? 50 : 41, portrait ? 40 : 32, fb);
+      if (Math.abs(camera.fov - targetFov) > 0.01) {
+        camera.fov = targetFov;
+        camera.updateProjectionMatrix();
       }
     }
 
-    return { scene, camera, update, reset, resize };
+    return {
+      scene, camera, update, reset, resize,
+      setFittingMode, focusSkin, setFittingView, dragFitting,
+      isFitting: () => fitting.active || fitting.blend > 0.02,
+    };
   }
 
   return { create };
